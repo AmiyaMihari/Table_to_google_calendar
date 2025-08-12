@@ -1,0 +1,110 @@
+BEGIN:VCALENDAR
+PRODID:-//CSV a Google Calendar//ES
+VERSION:2.0
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:ebe7ca3a-fc82-4be8-b4d7-4b230f3448ba@csv2ics.local
+DTSTART;VALUE=DATE:20250821
+DTEND;VALUE=DATE:20250822
+SUMMARY:1 - Actividad 1
+DESCRIPTION:Actividad autogestiva (opción múltiple). Identificar si el razo
+ namiento en ejemplos es inductivo o deductivo. Incluye 4 ejercicios de lóg
+ ica y un ejercicio de ecuaciones simples.
+END:VEVENT
+BEGIN:VEVENT
+UID:72300b3b-2354-4522-87ed-e8867f5e7554@csv2ics.local
+DTSTART;VALUE=DATE:20250825
+DTEND;VALUE=DATE:20250826
+SUMMARY:1 - Complementaria 1
+DESCRIPTION:Identificar razonamiento inductivo o deductivo en varios casos 
+ y predecir números en secuencias dadas. Incluye 5 ejemplos de razonamiento
+  y 9 secuencias numéricas para completar.
+END:VEVENT
+BEGIN:VEVENT
+UID:16db6a0a-6e4e-4469-9f20-241573d8115e@csv2ics.local
+DTSTART;VALUE=DATE:20250908
+DTEND;VALUE=DATE:20250909
+SUMMARY:2 - Actividad 1
+DESCRIPTION:Resolver incógnitas numéricas mostrando procedimiento. Ejercici
+ os de álgebra básica con pasos detallados y entrega en archivo adjunto.
+END:VEVENT
+BEGIN:VEVENT
+UID:bc057f96-d6f0-4f66-9ea2-c36bc2d40e27@csv2ics.local
+DTSTART;VALUE=DATE:20250911
+DTEND;VALUE=DATE:20250912
+SUMMARY:2 - Complementaria 1
+DESCRIPTION:Problemas de probabilidad con lanzamiento de dados y tabla de f
+ recuencias. Calcular probabilidades simples y condicionales usando fórmula
+ s.
+END:VEVENT
+BEGIN:VEVENT
+UID:a4c6575d-ffd0-4bf8-bc59-1bd72b00565d@csv2ics.local
+DTSTART;VALUE=DATE:20250922
+DTEND;VALUE=DATE:20250923
+SUMMARY:2 - Actividad 2
+DESCRIPTION:Resolver sistemas de ecuaciones lineales 2x2 mostrando procedim
+ iento. Incluye dos ejercicios de álgebra.
+END:VEVENT
+BEGIN:VEVENT
+UID:d5e86617-6969-49b8-b52f-cbb7343bc0ea@csv2ics.local
+DTSTART;VALUE=DATE:20250925
+DTEND;VALUE=DATE:20250926
+SUMMARY:2 - Complementaria 2
+DESCRIPTION:Ejercicios de estadística y probabilidad aplicadas: distribucio
+ nes muestrales\, pruebas de hipótesis y análisis de datos. Presentar proce
+ dimiento\, tablas y conclusiones.
+END:VEVENT
+BEGIN:VEVENT
+UID:21c1956f-62b9-448f-a247-74f2637af8e4@csv2ics.local
+DTSTART;VALUE=DATE:20251006
+DTEND;VALUE=DATE:20251007
+SUMMARY:3 - Complementaria 1
+DESCRIPTION:Preguntas sobre el GMAT\, estructura de problemas cuantitativos
+ \, mapa conceptual de criterios de decisión y resolución de dos problemas 
+ matemáticos.
+END:VEVENT
+BEGIN:VEVENT
+UID:305e3eea-dcfd-4733-aaea-df3037cca964@csv2ics.local
+DTSTART;VALUE=DATE:20251010
+DTEND;VALUE=DATE:20251011
+SUMMARY:3 - Complementaria 2
+DESCRIPTION:Problemas de lógica matemática\, números primos\, ecuaciones co
+ n condiciones y resolución con datos parciales.
+END:VEVENT
+BEGIN:VEVENT
+UID:bce2dc94-eb80-48a8-89ae-581ee6031aed@csv2ics.local
+DTSTART;VALUE=DATE:20251027
+DTEND;VALUE=DATE:20251028
+SUMMARY:4 - Complementaria 1
+DESCRIPTION:Investigar relación y utilidad del razonamiento verbal del GMAT
+  en la carrera. Redactar respuestas y justificar con referencias bibliográ
+ ficas.
+END:VEVENT
+BEGIN:VEVENT
+UID:4aad672c-d8ef-4a46-a636-253fbfedb0c0@csv2ics.local
+DTSTART;VALUE=DATE:20251029
+DTEND;VALUE=DATE:20251030
+SUMMARY:4 - Complementaria 2
+DESCRIPTION:Problemas de programación lineal para maximizar beneficios y di
+ stribuir inversiones. Definir variables\, función objetivo y restricciones
+ .
+END:VEVENT
+BEGIN:VEVENT
+UID:90d0b6e3-04bd-4596-9ea0-6143132b3185@csv2ics.local
+DTSTART;VALUE=DATE:20251110
+DTEND;VALUE=DATE:20251111
+SUMMARY:5 - Complementaria 1
+DESCRIPTION:Plantear modelos de programación lineal para problemas dados si
+ n resolverlos. Resolver mediante método gráfico y simplex ejercicios propu
+ estos.
+END:VEVENT
+BEGIN:VEVENT
+UID:efacb7ef-5606-483f-9eb2-46a85548d114@csv2ics.local
+DTSTART;VALUE=DATE:20251119
+DTEND;VALUE=DATE:20251120
+SUMMARY:5 - Complementaria 2
+DESCRIPTION:Modelar y resolver problemas de programación lineal con softwar
+ e como Lindo o RStudio. Incluir capturas\, resultados e interpretación.
+END:VEVENT
+END:VCALENDAR
