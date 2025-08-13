@@ -1,9 +1,18 @@
+# al inicio del archivo (junto a imports)
+import sys, os
+
 import csv
 from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import os
 import webbrowser
+
+# Para recursos empaquetados
+def resource_path(relative_path: str) -> str:
+    # Cuando está empaquetado, PyInstaller define _MEIPASS
+    base_path = getattr(sys, "_MEIPASS", os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
 
 # Intentar cargar Pillow para JPG
 try:
@@ -196,7 +205,7 @@ class App(tk.Tk):
         # Imagen JPG con Pillow (si está disponible)
         if PIL_AVAILABLE:
             try:
-                img_path = "gato2.jpeg"
+                img_path = resource_path("gato2.jpeg")
                 img = Image.open(img_path)
 
                 # Escalar si es muy grande (máx 600 px de ancho)
