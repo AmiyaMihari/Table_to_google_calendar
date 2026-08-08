@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import date, datetime, time
+from html import escape
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -349,11 +350,17 @@ def panel_google(actuales: list[Evento] | None = None) -> None:
         except gcal.ErrorGoogle as e:
             st.error(str(e))
             return
-        # target="_self" para que la autorización ocurra en esta misma pestaña y
-        # el usuario regrese aquí, en vez de quedarse con dos copias de la app.
-        st.markdown(
-            f'<a class="boton-google" href="{url}" target="_self">Conectar con Google</a>',
-            unsafe_allow_html=True,
+        # `st.html` y no `st.markdown`: éste último procesa markdown, y el
+        # `state` de OAuth lleva guiones bajos que se pueden interpretar como
+        # cursiva y romper el enlace. Los `&` se escapan como manda HTML.
+        #
+        # target="_top" y no "_self": Google rechaza sus pantallas de inicio de
+        # sesión dentro de un iframe (responde 403), y Streamlit Cloud sirve la
+        # app enmarcada en algunos casos. "_top" navega la ventana completa, y
+        # cuando no hay iframe se comporta igual que "_self".
+        st.html(
+            f'<a class="boton-google" href="{escape(url, quote=True)}" '
+            'target="_top" rel="noopener">Conectar con Google</a>'
         )
         # Google enseña una pantalla de advertencia porque la app no está
         # verificada (el trámite exige dominio propio). Sin explicar esto y
