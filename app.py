@@ -99,6 +99,16 @@ def estilos() -> None:
             padding: 12px 16px; font-size: .9rem; color: #3A4055; margin: 6px 0 14px;
           }
           .marca { font-size: .78rem; color: #767C8F; text-align: center; margin-top: 10px; }
+          /* st.link_button siempre abre pestaña nueva y no se puede cambiar; con
+             OAuth eso deja al usuario con dos pestañas y la original a medias.
+             Este enlace navega en la misma. */
+          a.boton-google {
+            display: block; width: 100%; box-sizing: border-box;
+            background: #4F46E5; color: #fff !important; text-decoration: none !important;
+            border-radius: 8px; padding: 11px 16px; text-align: center;
+            font-weight: 600; font-size: .95rem; border: 1px solid #4F46E5;
+          }
+          a.boton-google:hover { background: #4338CA; border-color: #4338CA; }
           div[data-testid="stMetricValue"] { font-size: 1.7rem; }
           /* El selector de tipo manda sobre todo lo demás: que se vea así. */
           div[data-testid="stSegmentedControl"] button { font-size: 1rem; padding: 10px 22px; }
@@ -132,6 +142,10 @@ def arrancar_estado() -> None:
     # pulsar ningún botón de «confirmar» para que cuenten.
     st.session_state.setdefault("guardados", [])
     st.session_state.setdefault("archivo", None)
+    # Cambiar este número le da una clave nueva al file_uploader, que es la
+    # única forma de vaciarlo: si no, el widget conserva el archivo y lo vuelve
+    # a cargar en el siguiente ciclo (y los eventos se duplicaban).
+    st.session_state.setdefault("ronda_subida", 0)
     st.session_state.setdefault("credenciales", None)
     st.session_state.setdefault("hoja", None)
     st.session_state.setdefault("fila_encabezado", None)
@@ -302,7 +316,12 @@ def panel_google(actuales: list[Evento] | None = None) -> None:
         except gcal.ErrorGoogle as e:
             st.error(str(e))
             return
-        st.link_button("Conectar con Google", url, width="stretch", type="primary")
+        # target="_self" para que la autorización ocurra en esta misma pestaña y
+        # el usuario regrese aquí, en vez de quedarse con dos copias de la app.
+        st.markdown(
+            f'<a class="boton-google" href="{url}" target="_self">Conectar con Google</a>',
+            unsafe_allow_html=True,
+        )
         st.caption("No perderás lo que llevas: al volver sigue todo aquí.")
 
 
@@ -342,13 +361,29 @@ def procesar_regreso_oauth(cfg: dict) -> None:
 # Paso 1 · Archivo
 # --------------------------------------------------------------------------- #
 
+def olvidar_archivo() -> None:
+    """Vacía el archivo actual y el widget que lo sostiene."""
+    st.session_state.archivo = None
+    st.session_state.firma_archivo = ""
+    st.session_state.ronda_subida += 1
+
+
 def paso_archivo(modo: str) -> tuple[bytes, str] | None:
     paso(1, "Sube tu archivo", TIPOS[modo]["ayuda_archivo"])
+
+    guardados = st.session_state.pop("aviso_guardado", 0)
+    if guardados:
+        st.success(
+            f"Guardé {guardados} eventos. Ahora **elige arriba el tipo** de la "
+            "siguiente tabla y súbela aquí; al final se exportan todos juntos.",
+            icon="✅",
+        )
 
     subido = st.file_uploader(
         "Arrastra aquí el CSV o el Excel",
         type=["csv", "xlsx", "xlsm", "xls", "ods", "tsv", "txt"],
         label_visibility="collapsed",
+        key=f"subida_{st.session_state.ronda_subida}",
     )
     # El contenido se guarda en la sesión, no se lee del widget: así el archivo
     # sobrevive a los reinicios de página (por ejemplo al volver de Google).
@@ -368,7 +403,7 @@ def paso_archivo(modo: str) -> tuple[bytes, str] | None:
         izq, der = st.columns([3, 2])
         izq.caption(f"📄 Trabajando con **{archivo[1]}**")
         if der.button("Quitar archivo", width="stretch"):
-            st.session_state.archivo = None
+            olvidar_archivo()
             st.rerun()
     return archivo
 
@@ -616,22 +651,31 @@ def paso_exportar(ajustes: dict, actuales: list[Evento], modo: str) -> None:
              "a tu calendario.")
         return
 
-    otro = MODO_HORA if modo == MODO_DIA else MODO_DIA
+    if st.session_state.guardados:
+        st.caption(
+            f"Ya se incluyen {len(st.session_state.guardados)} eventos de tablas "
+            "anteriores; no hace falta volver a añadirlos."
+        )
+
     izq, der = st.columns([3, 2])
     with izq:
         if actuales and st.button(
-            f"➕ Añadir otra tabla (p. ej. {TIPOS[otro]['corta'].lower()})",
+            "➕ Guardar éstos y subir otra tabla",
             width="stretch",
+            help="Sólo si tu plan trae las actividades y las videoconferencias en "
+                 "tablas separadas. Los eventos de arriba ya cuentan sin pulsar nada.",
         ):
-            # Los eventos de esta tabla pasan a la lista y se libera el hueco
-            # para el siguiente archivo, sin perder nada de lo ya hecho.
+            # Los eventos pasan a la lista y se libera el hueco para el siguiente
+            # archivo. Hay que vaciar también el widget: si no, vuelve a cargar
+            # el mismo archivo y los eventos se duplican en cada pulsación.
             st.session_state.guardados = st.session_state.guardados + actuales
-            st.session_state.archivo = None
-            st.session_state.firma_archivo = ""
+            st.session_state.aviso_guardado = len(actuales)
+            olvidar_archivo()
             st.rerun()
     with der:
-        if st.session_state.guardados:
-            st.caption(f"{len(st.session_state.guardados)} eventos vienen de tablas anteriores.")
+        if actuales:
+            st.caption("Los eventos de arriba ya están incluidos; este botón sólo "
+                       "sirve para sumar **otra** tabla distinta.")
 
     with st.expander(f"📋 Ver los {len(eventos)} eventos que se van a crear"):
         st.dataframe(
