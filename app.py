@@ -127,7 +127,11 @@ def nota(texto: str) -> None:
 # --------------------------------------------------------------------------- #
 
 def arrancar_estado() -> None:
-    st.session_state.setdefault("eventos", [])
+    # `guardados` son los eventos de tablas anteriores; los de la tabla que está
+    # abierta ahora se calculan al vuelo y se suman al exportar. Así no hay que
+    # pulsar ningún botón de «confirmar» para que cuenten.
+    st.session_state.setdefault("guardados", [])
+    st.session_state.setdefault("archivo", None)
     st.session_state.setdefault("credenciales", None)
     st.session_state.setdefault("hoja", None)
     st.session_state.setdefault("fila_encabezado", None)
@@ -182,8 +186,8 @@ def selector_de_tipo() -> str:
 # Barra lateral
 # --------------------------------------------------------------------------- #
 
-def barra_lateral(modo: str) -> dict:
-    with st.sidebar:
+def barra_lateral(modo: str, dibujar_google: bool = True) -> dict:
+    with st.container():
         mascota = RAIZ / "assets" / "gato.jpeg"
         if mascota.exists():
             st.image(str(mascota), width="stretch")
@@ -226,14 +230,9 @@ def barra_lateral(modo: str) -> dict:
                 help="Excel deja huecos debajo de una celda combinada; esto los completa.",
             )
 
-        st.divider()
-        panel_google()
-
-        st.markdown(
-            '<div class="marca">Hecho para SUAyED · '
-            '<a href="https://github.com/AmiyaMihari" target="_blank">@AmiyaMihari</a></div>',
-            unsafe_allow_html=True,
-        )
+        if dibujar_google:
+            st.divider()
+            panel_google()
 
     return {
         "materia": materia,
@@ -263,7 +262,7 @@ AYUDA_SIN_CONFIGURAR = (
 )
 
 
-def panel_google() -> None:
+def panel_google(actuales: list[Evento] | None = None) -> None:
     st.markdown("### 🔗 Google Calendar")
 
     if not gcal.DISPONIBLE:
@@ -292,12 +291,19 @@ def panel_google() -> None:
             st.rerun()
     else:
         try:
-            url = gcal.url_autorizacion(cfg)
+            # Al ir a Google el navegador recarga la página y Streamlit pierde la
+            # sesión, así que el trabajo del usuario viaja guardado junto al
+            # `state` de OAuth y se restaura al volver.
+            url = gcal.url_autorizacion(cfg, datos_sesion={
+                "guardados": st.session_state.guardados + list(actuales or []),
+                "materia": st.session_state.get("materia", ""),
+                "modo": st.session_state.get("modo"),
+            })
         except gcal.ErrorGoogle as e:
             st.error(str(e))
             return
         st.link_button("Conectar con Google", url, width="stretch", type="primary")
-        st.caption("Sólo se usa para crear los eventos que tú confirmes.")
+        st.caption("No perderás lo que llevas: al volver sigue todo aquí.")
 
 
 def procesar_regreso_oauth(cfg: dict) -> None:
@@ -310,7 +316,7 @@ def procesar_regreso_oauth(cfg: dict) -> None:
 
     estado = st.query_params.get("state")
     try:
-        credenciales = gcal.credenciales_desde_codigo(cfg, codigo, estado)
+        credenciales, datos = gcal.credenciales_desde_codigo(cfg, codigo, estado)
     except gcal.ErrorGoogle as e:
         st.query_params.clear()
         st.error(str(e))
@@ -318,6 +324,16 @@ def procesar_regreso_oauth(cfg: dict) -> None:
 
     st.session_state.credenciales = credenciales
     st.session_state.correo_google = gcal.correo_usuario(credenciales)
+
+    # Devolverle al usuario lo que tenía antes de salir a Google.
+    if datos:
+        st.session_state.guardados = datos.get("guardados") or []
+        for clave in ("materia", "modo"):
+            if datos.get(clave) is not None and clave not in st.session_state:
+                st.session_state[clave] = datos[clave]
+        if st.session_state.guardados:
+            st.session_state.aviso_restaurado = len(st.session_state.guardados)
+
     st.query_params.clear()
     st.rerun()
 
@@ -329,38 +345,32 @@ def procesar_regreso_oauth(cfg: dict) -> None:
 def paso_archivo(modo: str) -> tuple[bytes, str] | None:
     paso(1, "Sube tu archivo", TIPOS[modo]["ayuda_archivo"])
 
-    ejemplo = TIPOS[modo]["ejemplo"]
-    ruta_ejemplo = RAIZ / "ejemplos" / ejemplo if ejemplo else None
-    hay_ejemplo = bool(ruta_ejemplo and ruta_ejemplo.exists())
-
-    izq, der = st.columns([3, 2])
-    with izq:
-        subido = st.file_uploader(
-            "Arrastra aquí el CSV o el Excel",
-            type=["csv", "xlsx", "xlsm", "xls", "ods", "tsv", "txt"],
-            label_visibility="collapsed",
-        )
-    with der:
-        if hay_ejemplo:
-            if st.button("📄 Probar con un archivo de ejemplo", width="stretch"):
-                st.session_state["usar_ejemplo"] = True
-            if st.session_state.get("usar_ejemplo") and st.button(
-                "Quitar el ejemplo", width="stretch"
-            ):
-                st.session_state["usar_ejemplo"] = False
-
-    if subido is not None:
-        st.session_state["usar_ejemplo"] = False
-        return subido.getvalue(), subido.name
-    if hay_ejemplo and st.session_state.get("usar_ejemplo"):
-        return ruta_ejemplo.read_bytes(), ruta_ejemplo.name
-
-    nota(
-        "¿No tienes el plan en tabla? Copia la tabla del PDF y pégala en Excel o en "
-        "Google Sheets, guárdala y súbela aquí. No importa si arriba hay filas de "
-        "título: la app detecta sola dónde empieza la tabla."
+    subido = st.file_uploader(
+        "Arrastra aquí el CSV o el Excel",
+        type=["csv", "xlsx", "xlsm", "xls", "ods", "tsv", "txt"],
+        label_visibility="collapsed",
     )
-    return None
+    # El contenido se guarda en la sesión, no se lee del widget: así el archivo
+    # sobrevive a los reinicios de página (por ejemplo al volver de Google).
+    if subido is not None:
+        st.session_state.archivo = (subido.getvalue(), subido.name)
+
+    archivo = st.session_state.archivo
+    if archivo is None:
+        nota(
+            "¿No tienes el plan en tabla? Copia la tabla del PDF y pégala en Excel o en "
+            "Google Sheets, guárdala y súbela aquí. No importa si arriba hay filas de "
+            "título ni si las celdas de «Unidad» están combinadas: la app lo resuelve."
+        )
+        return None
+
+    if subido is None:
+        izq, der = st.columns([3, 2])
+        izq.caption(f"📄 Trabajando con **{archivo[1]}**")
+        if der.button("Quitar archivo", width="stretch"):
+            st.session_state.archivo = None
+            st.rerun()
+    return archivo
 
 
 def paso_lectura(datos: bytes, nombre: str) -> tablas.Lectura | None:
@@ -397,21 +407,6 @@ def paso_lectura(datos: bytes, nombre: str) -> tablas.Lectura | None:
         st.error(str(e))
         return None
 
-    for aviso in lectura.avisos:
-        st.info(aviso, icon="🔎")
-
-    with st.expander("Ajustes de lectura · sólo si la tabla se ve mal"):
-        actual = lectura.fila_encabezado + 1
-        nueva = st.number_input(
-            "Fila donde están los títulos de las columnas",
-            min_value=1, max_value=30, value=actual, step=1,
-            help="Cámbiala si la vista previa muestra encabezados equivocados.",
-        )
-        if nueva - 1 != lectura.fila_encabezado:
-            st.session_state.fila_encabezado = int(nueva) - 1
-            st.rerun()
-        st.dataframe(lectura.df.head(8), width="stretch", hide_index=True)
-
     st.success(
         f"Tabla leída: **{len(lectura.df)} filas** y **{len(lectura.df.columns)} columnas**"
         + (f" de la hoja «{lectura.hoja}»" if lectura.hoja else ""),
@@ -424,16 +419,22 @@ def paso_lectura(datos: bytes, nombre: str) -> tablas.Lectura | None:
 # Paso 2 · Mapeo (sólo los campos del tipo elegido)
 # --------------------------------------------------------------------------- #
 
-def paso_mapeo(df: pd.DataFrame, modo: str, dayfirst: bool) -> dict:
+def paso_mapeo(lectura: tablas.Lectura, modo: str, dayfirst: bool) -> dict:
+    df = lectura.df
     principales, opcionales = deteccion.campos_de(modo)
-    paso(2, "Revisa qué es cada columna", "ya está detectado; corrige sólo si hace falta")
+    paso(2, "Configuración manual", "opcional — sólo si algo salió mal")
 
     clave = firma(st.session_state.firma_archivo, st.session_state.hoja, modo, len(df.columns))
     if f"auto_{clave}" not in st.session_state:
         st.session_state[f"auto_{clave}"] = deteccion.detectar_columnas(df, dayfirst, modo)
     automatico = st.session_state[f"auto_{clave}"]
 
+    total = len(principales) + len(opcionales)
+    detectados = sum(1 for c in principales + opcionales if automatico.get(c))
+    falta_fecha = not automatico.get("fecha")
+
     opciones = ["— ninguna —"] + list(df.columns)
+    mapeo: dict[str, str | None] = {c: None for c in deteccion.CAMPOS}
 
     def selector(campo: str, contenedor):
         sugerida = automatico.get(campo)
@@ -444,29 +445,38 @@ def paso_mapeo(df: pd.DataFrame, modo: str, dayfirst: bool) -> dict:
         )
         return None if elegida == "— ninguna —" else elegida
 
-    mapeo: dict[str, str | None] = {c: None for c in deteccion.CAMPOS}
-
-    for campo, col in zip(principales, st.columns(len(principales))):
-        mapeo[campo] = selector(campo, col)
-
-    with st.expander("Columnas opcionales"):
+    # Se abre solo cuando de verdad hace falta intervenir.
+    resumen = (
+        "⚠️ No encontré la columna de fechas — ábreme"
+        if falta_fecha else
+        f"🪄 Detecté {detectados} de {total} columnas automáticamente. "
+        "Ábreme sólo si algo quedó mal."
+    )
+    with st.expander(resumen, expanded=falta_fecha):
+        for campo, col in zip(principales, st.columns(len(principales))):
+            mapeo[campo] = selector(campo, col)
         for campo, col in zip(opcionales, st.columns(len(opcionales))):
             mapeo[campo] = selector(campo, col)
 
-    total = len(principales) + len(opcionales)
-    detectados = sum(1 for c in principales + opcionales if automatico.get(c))
-    st.caption(f"🪄 Detecté automáticamente {detectados} de {total} columnas.")
-
-    if not mapeo["fecha"]:
-        st.warning(
-            "No encontré la columna de fechas. Selecciónala arriba: sin fecha no se "
-            "pueden crear eventos.",
-            icon="⚠️",
+        st.divider()
+        st.caption(
+            "Si los nombres de las columnas de arriba se ven raros, la tabla no "
+            "empieza donde creí. Corrige aquí en qué fila están los títulos:"
         )
-    elif modo == MODO_HORA and not mapeo["hora"]:
+        izq, der = st.columns([1, 3])
+        nueva = izq.number_input(
+            "Fila de los títulos",
+            min_value=1, max_value=30, value=lectura.fila_encabezado + 1, step=1,
+        )
+        der.dataframe(df.head(4), width="stretch", hide_index=True)
+        if nueva - 1 != lectura.fila_encabezado:
+            st.session_state.fila_encabezado = int(nueva) - 1
+            st.rerun()
+
+    if modo == MODO_HORA and not mapeo["hora"]:
         st.warning(
-            "No encontré la columna de horarios. Si esta tabla no trae hora, arriba "
-            "cambia a «Actividades y entregas».",
+            "Esta tabla no parece traer horarios. Si son entregas, cambia el tipo "
+            "allá arriba a «Actividades y entregas».",
             icon="⚠️",
         )
     return mapeo
@@ -541,9 +551,9 @@ CONFIG_COLUMNAS = {
 }
 
 
-def paso_revision(df: pd.DataFrame, mapeo: dict, modo: str, ajustes: dict, origen: str) -> None:
-    paso(3, "Revisa y corrige", "puedes editar cualquier celda")
-
+def paso_revision(df: pd.DataFrame, mapeo: dict, modo: str, ajustes: dict,
+                  origen: str) -> list[Evento]:
+    """Muestra los eventos de la tabla abierta y devuelve los que quedaron."""
     eventos = construir_eventos(
         df, mapeo,
         materia=ajustes["materia"],
@@ -556,23 +566,25 @@ def paso_revision(df: pd.DataFrame, mapeo: dict, modo: str, ajustes: dict, orige
         origen=origen,
     )
 
-    if not eventos:
-        st.warning("No encontré filas con datos. Revisa el mapeo del paso 2.", icon="⚠️")
-        return
-
     listos = sum(1 for e in eventos if e.valido)
     con_problema = len(eventos) - listos
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Filas leídas", len(eventos))
-    m2.metric("Eventos listos", listos)
-    m3.metric("Necesitan revisión", con_problema)
+    paso(3, "Revisa los eventos",
+         f"opcional — {listos} listos" + (f", {con_problema} por revisar" if con_problema else ""))
+
+    if not eventos:
+        st.warning(
+            "No encontré filas con datos. Abre «Configuración manual» arriba y revisa "
+            "que las columnas apunten a donde deben.",
+            icon="⚠️",
+        )
+        return []
 
     if con_problema:
-        with st.expander(f"⚠️ {con_problema} fila(s) sin fecha válida"):
-            for ev in eventos:
-                if not ev.valido:
-                    st.write(f"**Fila {ev.fila}** — {ev.titulo or '(sin título)'}: {ev.problema}")
-            st.caption("Escribe la fecha correcta en la tabla de abajo y quedarán incluidas.")
+        st.warning(
+            f"{con_problema} fila(s) sin fecha que yo entienda; están desmarcadas y no "
+            "se exportarán. Escribe la fecha correcta en la tabla y se incluyen solas.",
+            icon="⚠️",
+        )
 
     editado = st.data_editor(
         _a_dataframe(eventos, modo),
@@ -582,31 +594,15 @@ def paso_revision(df: pd.DataFrame, mapeo: dict, modo: str, ajustes: dict, orige
         key=f"editor_{firma(origen, modo, len(eventos), ajustes['plantilla'], ajustes['materia'])}",
         column_config={c: CONFIG_COLUMNAS[c]() for c in columnas_editor(modo)},
     )
-
-    izq, der = st.columns([3, 2])
-    with izq:
-        if st.button("➕ Añadir a mi lista", type="primary", width="stretch"):
-            nuevos = _desde_dataframe(editado, origen)
-            if not nuevos:
-                st.warning("No hay filas marcadas con fecha válida.")
-            else:
-                st.session_state.eventos.extend(nuevos)
-                st.toast(f"Añadí {len(nuevos)} eventos a tu lista", icon="✅")
-                st.rerun()
-    with der:
-        otro = MODO_HORA if modo == MODO_DIA else MODO_DIA
-        st.caption(
-            f"¿También tienes {TIPOS[otro]['corta'].lower()}? Añade éstas, cambia el "
-            "tipo allá arriba y sube la otra tabla: se acumulan en la misma lista."
-        )
+    return _desde_dataframe(editado, origen)
 
 
 # --------------------------------------------------------------------------- #
 # Paso 4 · Exportar
 # --------------------------------------------------------------------------- #
 
-def paso_exportar(ajustes: dict) -> None:
-    eventos: list[Evento] = st.session_state.eventos
+def paso_exportar(ajustes: dict, actuales: list[Evento], modo: str) -> None:
+    eventos: list[Evento] = st.session_state.guardados + actuales
     dia = sum(1 for e in eventos if e.todo_el_dia)
     hora = len(eventos) - dia
     resumen = " + ".join(
@@ -616,11 +612,28 @@ def paso_exportar(ajustes: dict) -> None:
     paso(4, "Manda todo a tu calendario", resumen, activo=bool(eventos))
 
     if not eventos:
-        nota("Aún no has añadido eventos. Completa los pasos anteriores y pulsa "
-             "«Añadir a mi lista».")
+        nota("Sube un archivo arriba y aquí aparecerán las opciones para mandarlo "
+             "a tu calendario.")
         return
 
-    with st.expander(f"📋 Ver mi lista ({len(eventos)} eventos)"):
+    otro = MODO_HORA if modo == MODO_DIA else MODO_DIA
+    izq, der = st.columns([3, 2])
+    with izq:
+        if actuales and st.button(
+            f"➕ Añadir otra tabla (p. ej. {TIPOS[otro]['corta'].lower()})",
+            width="stretch",
+        ):
+            # Los eventos de esta tabla pasan a la lista y se libera el hueco
+            # para el siguiente archivo, sin perder nada de lo ya hecho.
+            st.session_state.guardados = st.session_state.guardados + actuales
+            st.session_state.archivo = None
+            st.session_state.firma_archivo = ""
+            st.rerun()
+    with der:
+        if st.session_state.guardados:
+            st.caption(f"{len(st.session_state.guardados)} eventos vienen de tablas anteriores.")
+
+    with st.expander(f"📋 Ver los {len(eventos)} eventos que se van a crear"):
         st.dataframe(
             pd.DataFrame([{
                 "Título": ev.titulo,
@@ -630,8 +643,8 @@ def paso_exportar(ajustes: dict) -> None:
             } for ev in eventos]),
             width="stretch", hide_index=True,
         )
-        if st.button("🗑️ Vaciar la lista"):
-            st.session_state.eventos = []
+        if st.session_state.guardados and st.button("🗑️ Olvidar las tablas anteriores"):
+            st.session_state.guardados = []
             st.rerun()
 
     directo, ics, enlaces, csv_google = st.tabs([
@@ -726,6 +739,13 @@ def pestania_envio_directo(eventos: list[Evento], ajustes: dict) -> None:
 
     try:
         calendarios = gcal.listar_calendarios(st.session_state.credenciales)
+    except gcal.SesionCaducada as e:
+        st.warning(str(e), icon="⏱️")
+        if st.button("Reconectar con Google", type="primary"):
+            for clave in ("credenciales", "correo_google"):
+                st.session_state.pop(clave, None)
+            st.rerun()
+        return
     except gcal.ErrorGoogle as e:
         st.error(str(e))
         return
@@ -820,22 +840,48 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    modo = selector_de_tipo()
-    ajustes = barra_lateral(modo)
+    restaurados = st.session_state.pop("aviso_restaurado", 0)
+    if restaurados:
+        st.success(
+            f"Listo, ya estás conectado. Tus {restaurados} eventos siguen aquí.",
+            icon="✅",
+        )
 
+    modo = selector_de_tipo()
+    # La barra lateral se arma al final, cuando ya sabemos qué eventos hay que
+    # preservar si el usuario se va a autenticar con Google.
+    contenedor_lateral = st.sidebar.container()
+
+    actuales: list[Evento] = []
     archivo = paso_archivo(modo)
     if archivo is not None:
         datos, nombre = archivo
         lectura = paso_lectura(datos, nombre)
         if lectura is not None:
-            mapeo = paso_mapeo(lectura.df, modo, ajustes["dayfirst"])
+            with contenedor_lateral:
+                ajustes = barra_lateral(modo, dibujar_google=False)
+            mapeo = paso_mapeo(lectura, modo, ajustes["dayfirst"])
             origen = nombre + (f" · {lectura.hoja}" if lectura.hoja else "")
-            paso_revision(lectura.df, mapeo, modo, ajustes, origen)
+            actuales = paso_revision(lectura.df, mapeo, modo, ajustes, origen)
+        else:
+            with contenedor_lateral:
+                ajustes = barra_lateral(modo, dibujar_google=False)
     else:
-        paso(2, "Revisa qué es cada columna", activo=False)
-        paso(3, "Revisa y corrige", activo=False)
+        with contenedor_lateral:
+            ajustes = barra_lateral(modo, dibujar_google=False)
+        paso(2, "Configuración manual", "opcional", activo=False)
+        paso(3, "Revisa los eventos", "opcional", activo=False)
 
-    paso_exportar(ajustes)
+    paso_exportar(ajustes, actuales, modo)
+
+    with st.sidebar:
+        st.divider()
+        panel_google(actuales)
+        st.markdown(
+            '<div class="marca">Hecho para SUAyED · '
+            '<a href="https://github.com/AmiyaMihari" target="_blank">@AmiyaMihari</a></div>',
+            unsafe_allow_html=True,
+        )
 
     with st.expander("❓ Preguntas frecuentes"):
         st.markdown(

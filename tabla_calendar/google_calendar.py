@@ -19,6 +19,7 @@ from pathlib import Path
 from .modelo import Evento
 
 try:
+    from google.auth.exceptions import RefreshError
     from google.auth.transport.requests import Request
 
     from google_auth_oauthlib.flow import Flow
@@ -31,6 +32,7 @@ except Exception as _e:  # pragma: no cover - sólo si faltan dependencias
     DISPONIBLE = False
     ERROR_IMPORTACION = str(_e)
     HttpError = Exception  # type: ignore
+    RefreshError = Exception  # type: ignore
 
 # `calendar` (y no sólo `calendar.events`) para poder crear un calendario nuevo.
 ALCANCES = ["https://www.googleapis.com/auth/calendar"]
@@ -39,16 +41,53 @@ AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 _VIGENCIA_ESTADO = 900  # segundos que aceptamos un `state` pendiente
+_MAX_PENDIENTES = 200
 
-# state -> (momento, code_verifier). Guardar el verificador es obligatorio: la
-# librería usa PKCE, manda su hash al pedir la autorización, y Google exige el
-# original al canjear el código. Como el `Flow` se reconstruye en la otra
-# ejecución, si no lo conservamos aquí se pierde ("Missing code verifier").
-_estados_pendientes: dict[str, tuple[float, str | None]] = {}
+# state -> (momento, code_verifier, datos_de_sesion).
+#
+# Guardar el verificador es obligatorio: la librería usa PKCE, manda su hash al
+# pedir la autorización y Google exige el original al canjear el código. Como el
+# `Flow` se reconstruye en la otra ejecución, si no lo conservamos aquí se pierde
+# ("Missing code verifier").
+#
+# `datos_de_sesion` resuelve otro problema: al volver de Google el navegador
+# recarga la página entera, Streamlit abre una sesión nueva y `session_state` se
+# vacía. Este diccionario vive en el proceso, no en la sesión, así que es el
+# único lugar donde el trabajo del usuario sobrevive el viaje de ida y vuelta.
+_estados_pendientes: dict[str, tuple[float, str | None, dict | None]] = {}
 
 
 class ErrorGoogle(Exception):
     """Fallo en la conexión con Google, con mensaje para el usuario."""
+
+
+class SesionCaducada(ErrorGoogle):
+    """El permiso de Google dejó de ser válido; hay que volver a conectarse."""
+
+
+MENSAJE_CADUCADA = (
+    "Tu permiso con Google dejó de ser válido (caduca al cabo de un rato, o lo "
+    "retiraste desde tu cuenta). Pulsa «Desconectar» y vuelve a conectarte; no "
+    "perderás los eventos que ya tienes."
+)
+
+
+def _llamar(que_hacia: str, funcion):
+    """Ejecuta una llamada a la API convirtiendo los fallos en mensajes claros.
+
+    El token de acceso caduca en una hora: sin esto, un usuario que deja la
+    pestaña abierta se encuentra con que la app entera revienta.
+    """
+    try:
+        return funcion()
+    except RefreshError as e:
+        raise SesionCaducada(MENSAJE_CADUCADA) from e
+    except HttpError as e:
+        raise ErrorGoogle(f"{que_hacia}: {e}") from e
+    except ErrorGoogle:
+        raise
+    except Exception as e:
+        raise ErrorGoogle(f"{que_hacia}: {type(e).__name__}: {e}") from e
 
 
 # --------------------------------------------------------------------------- #
@@ -155,12 +194,22 @@ def _flow(cfg: dict, state: str | None = None):
 # Autorización
 # --------------------------------------------------------------------------- #
 
-def url_autorizacion(cfg: dict) -> str:
-    """URL a la que se manda al usuario para dar permiso."""
-    ahora = _time.time()
-    for viejo in [s for s, (t, _) in _estados_pendientes.items()
+def _purgar(ahora: float) -> None:
+    for viejo in [s for s, (t, _, _) in _estados_pendientes.items()
                   if ahora - t > _VIGENCIA_ESTADO]:
         _estados_pendientes.pop(viejo, None)
+    while len(_estados_pendientes) > _MAX_PENDIENTES:
+        _estados_pendientes.pop(min(_estados_pendientes, key=lambda s: _estados_pendientes[s][0]))
+
+
+def url_autorizacion(cfg: dict, datos_sesion: dict | None = None) -> str:
+    """URL a la que se manda al usuario para dar permiso.
+
+    `datos_sesion` es lo que el usuario lleva hecho; se guarda aquí para poder
+    devolvérselo cuando regrese, porque su sesión de Streamlit no sobrevive.
+    """
+    ahora = _time.time()
+    _purgar(ahora)
 
     state = secrets.token_urlsafe(24)
     flujo = _flow(cfg, state=state)
@@ -170,12 +219,12 @@ def url_autorizacion(cfg: dict) -> str:
         prompt="consent",
     )
     # `authorization_url` genera el code_verifier; hay que conservarlo.
-    _estados_pendientes[state] = (ahora, getattr(flujo, "code_verifier", None))
+    _estados_pendientes[state] = (ahora, getattr(flujo, "code_verifier", None), datos_sesion)
     return url
 
 
 def credenciales_desde_codigo(cfg: dict, codigo: str, state: str | None = None):
-    """Canjea el código de Google por credenciales utilizables."""
+    """Canjea el código por credenciales. Devuelve (credenciales, datos_sesion)."""
     registro = _estados_pendientes.pop(state, None) if state is not None else None
     if state is not None and registro is None:
         raise ErrorGoogle(
@@ -196,7 +245,8 @@ def credenciales_desde_codigo(cfg: dict, codigo: str, state: str | None = None):
             "vez, vuelve a pulsar «Conectar con Google» para generar uno nuevo."
             f"\n\nDetalle: {type(e).__name__}: {e}"
         ) from e
-    return flujo.credentials
+
+    return flujo.credentials, (registro[2] if registro else None)
 
 
 def refrescar(credenciales):
@@ -204,7 +254,7 @@ def refrescar(credenciales):
         try:
             credenciales.refresh(Request())
         except Exception as e:
-            raise ErrorGoogle(f"La sesión con Google caducó: {e}") from e
+            raise SesionCaducada(MENSAJE_CADUCADA) from e
     return credenciales
 
 
@@ -226,10 +276,10 @@ def correo_usuario(credenciales) -> str:
 
 def listar_calendarios(credenciales) -> list[dict]:
     """Calendarios donde el usuario puede escribir."""
-    try:
-        respuesta = _servicio(credenciales).calendarList().list(maxResults=250).execute()
-    except HttpError as e:
-        raise ErrorGoogle(f"No pude leer tus calendarios: {e}") from e
+    respuesta = _llamar(
+        "No pude leer tus calendarios",
+        lambda: _servicio(credenciales).calendarList().list(maxResults=250).execute(),
+    )
 
     salida = []
     for item in respuesta.get("items", []):
@@ -244,13 +294,13 @@ def listar_calendarios(credenciales) -> list[dict]:
 
 
 def crear_calendario(credenciales, nombre: str, zona: str) -> str:
-    try:
-        creado = _servicio(credenciales).calendars().insert(
+    creado = _llamar(
+        f"No pude crear el calendario «{nombre}»",
+        lambda: _servicio(credenciales).calendars().insert(
             body={"summary": nombre, "timeZone": zona}
-        ).execute()
-        return creado["id"]
-    except HttpError as e:
-        raise ErrorGoogle(f"No pude crear el calendario «{nombre}»: {e}") from e
+        ).execute(),
+    )
+    return creado["id"]
 
 
 def _cuerpo(ev: Evento, zona: str, duracion_horas: float, recordatorio_min: int | None) -> dict:
@@ -311,8 +361,8 @@ def eventos_existentes(credenciales, calendario_id: str, eventos: list[Evento]) 
             pagina = respuesta.get("nextPageToken")
             if not pagina:
                 break
-    except HttpError:
-        return set()  # si falla, simplemente no filtramos
+    except Exception:
+        return set()  # es sólo para no duplicar: si falla, seguimos sin filtrar
     return encontrados
 
 
@@ -331,7 +381,7 @@ def insertar_eventos(
     validos = [e for e in eventos if e.valido]
     ya_estan = eventos_existentes(credenciales, calendario_id, validos) if evitar_duplicados else set()
 
-    servicio = _servicio(credenciales)
+    servicio = _llamar("No pude conectar con Google", lambda: _servicio(credenciales))
     creados, omitidos, errores = 0, 0, []
 
     for i, ev in enumerate(validos, start=1):
