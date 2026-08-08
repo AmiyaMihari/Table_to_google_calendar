@@ -1,2 +1,25 @@
-.venv
-build/
+# Entornos
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Secretos — nunca subir. Si esto se filtra, Google revoca las credenciales
+# y cualquiera puede suplantar la app: no quites estas reglas.
+env/
+secrets/
+.streamlit/secrets.toml
+*client_secret*.json
+*credentials*.json
+
+# Artefactos del ejecutable antiguo (regenerables)
+legacy/build/
+legacy/dist/
+
+# Archivos reales de prueba: son planes de trabajo de terceros, con nombre y
+# correo de la asesora. Se quedan en local; para demos están ejemplos/.
+testing_files/
+
+# Sistema
+.DS_Store
+Thumbs.db

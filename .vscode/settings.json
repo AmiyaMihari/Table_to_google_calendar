@@ -1,0 +1,21 @@
+{
+  // VS Code usa el .venv del proyecto para ejecutar, depurar y autocompletar,
+  // y lo activa solo en cada terminal nueva que abras aquí.
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python.terminal.activateEnvInCurrentTerminal": false,
+  "python.analysis.extraPaths": ["${workspaceFolder}"],
+
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true
+  },
+  "search.exclude": {
+    ".venv": true,
+    "legacy/build": true,
+    "legacy/dist": true
+  },
+  "[python]": {
+    "editor.rulers": [88]
+  }
+}
