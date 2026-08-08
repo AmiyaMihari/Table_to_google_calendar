@@ -191,9 +191,15 @@ _RE_HORA = re.compile(
 )
 
 # Para no confundir los números de una fecha con horas ("21/08/2025 16:00").
+#
+# El "ni antes ni después dos puntos" de la forma día/mes es imprescindible: sin
+# él, el "00-18" de "17:00-18:00" pasa por fecha, se borra, y del rango horario
+# sólo queda "17: :00", que se lee como medianoche. Un evento a las 00:00 y sin
+# ningún aviso, que es la peor forma de fallar. Los rangos con guion son la
+# forma normal de escribir el horario en la mitad de los planes de trabajo.
 _RE_FECHA_INCRUSTADA = re.compile(
     r"\b\d{4}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,2}\b"
-    r"|\b\d{1,2}\s*[-/.]\s*\d{1,2}(?:\s*[-/.]\s*\d{2,4})?\b"
+    r"|(?<!:)\b\d{1,2}\s*[-/.]\s*\d{1,2}(?:\s*[-/.]\s*\d{2,4})?\b(?!:)"
     r"|\b\d{1,2}\s*(?:de\s+)?[-/. ]\s*(?:" + "|".join(sorted(MESES, key=len, reverse=True)) +
     r")[a-z]*\.?(?:\s*(?:de\s+)?[-/. ]?\s*\d{2,4})?\b"
 )
