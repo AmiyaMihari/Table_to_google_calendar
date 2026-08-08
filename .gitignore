@@ -20,6 +20,10 @@ legacy/dist/
 # correo de la asesora. Se quedan en local; para demos están ejemplos/.
 testing_files/
 
+# Notas para Claude Code. Normalmente sí se versiona (le sirve a cualquiera que
+# clone el repo); quita esta línea si prefieres subirlo.
+CLAUDE.md
+
 # Sistema
 .DS_Store
 Thumbs.db

@@ -39,10 +39,10 @@ cambia todo lo que la app te pide después:
 | 📝 **Actividades y entregas** *(el que viene puesto)* | La tabla de tareas con fecha límite | Eventos de **todo el día** |
 | 🎥 **Videoconferencias y asesorías** | La tabla de sesiones con horario | Eventos **con hora de inicio y fin** |
 
-> 💡 **¿Tienes las dos cosas?** Es lo normal, y está previsto: haz primero las
-> actividades, pulsa *Añadir a mi lista*, luego cambia el botón de arriba a
-> videoconferencias, sube esa tabla y añádela también. **Los eventos se acumulan**
-> y al final se exportan todos juntos, de una sola vez.
+> 💡 **¿Tienes las dos cosas?** Es lo normal, y está previsto: empieza por las
+> actividades y, cuando llegues al final, pulsa **«➕ Incluir también
+> videoconferencias»**. La app guarda lo que llevas, cambia sola el tipo y sólo
+> te pide la otra tabla. **Al final se exportan todas juntas.**
 
 ## Paso 1 · Sube tu archivo
 
@@ -53,8 +53,7 @@ Formatos aceptados: `.xlsx`, `.xlsm`, `.xls`, `.ods`, `.csv`.
 Si es un Excel con varias hojas, aparece un menú para elegir cuál usar.
 
 Verás un mensaje verde: *«Tabla leída: 12 filas y 4 columnas»*. Si el número de
-filas se ve raro, abre **«Ajustes de lectura»** y corrige en qué fila están los
-títulos de las columnas.
+filas se ve raro, lo arreglas en el paso 2.
 
 ¿Nunca la has usado? Pulsa **📄 Probar con un archivo de ejemplo** para ver cómo
 funciona sin arriesgar nada.
@@ -85,10 +84,8 @@ Todo aquí es **editable**. Puedes:
 - desmarcar la casilla ✓ de las filas que no quieres,
 - ajustar horarios.
 
-Cuando esté a tu gusto, pulsa **➕ Añadir a mi lista**.
-
-> Aquí es donde regresas si tienes la otra tabla: cambia el botón de arriba
-> (actividades ↔ videoconferencias), sube el otro archivo y vuelve a añadir.
+**No hay que confirmar nada.** Todo lo que ves aquí ya cuenta para el paso 4;
+puedes bajar directamente.
 
 ## Paso 4 · Mándalos a tu calendario
 
@@ -150,7 +147,8 @@ Suele ser un `.xls` viejo o un archivo protegido con contraseña. Ábrelo en Exc
 y guárdalo como `.xlsx`.
 
 **La tabla se leyó con encabezados raros («Columna 1», «Unnamed…»)**
-Abre **«Ajustes de lectura»** en el paso 1 y ajusta la fila de los títulos.
+Abre **«Configuración manual»** en el paso 2: ahí ajustas en qué fila están los
+títulos de las columnas.
 
 **Las fechas cayeron en el día equivocado**
 `03/04/2025` puede ser 3 de abril o 4 de marzo. En la barra lateral →

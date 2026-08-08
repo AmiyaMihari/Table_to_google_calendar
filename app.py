@@ -109,6 +109,19 @@ def estilos() -> None:
             font-weight: 600; font-size: .95rem; border: 1px solid #4F46E5;
           }
           a.boton-google:hover { background: #4338CA; border-color: #4338CA; }
+          /* Streamlit escribe «Press Enter to apply» y no es configurable;
+             se oculta y se sustituye por la versión en español. */
+          div[data-testid="InputInstructions"] { visibility: hidden; position: relative; }
+          div[data-testid="InputInstructions"]::after {
+            content: "Pulsa Enter o haz clic fuera para aplicarlo";
+            visibility: visible; position: absolute; left: 0; top: 0; white-space: nowrap;
+          }
+          .aviso-google {
+            background: #FFF7E6; border: 1px solid #F0B429; border-left: 4px solid #F0B429;
+            border-radius: 8px; padding: 11px 13px; margin: 12px 0 18px;
+            font-size: .82rem; line-height: 1.5; color: #6B4A0B;
+          }
+          .aviso-google b { color: #7A2E0E; }
           div[data-testid="stMetricValue"] { font-size: 1.7rem; }
           /* El selector de tipo manda sobre todo lo demás: que se vea así. */
           div[data-testid="stSegmentedControl"] button { font-size: 1rem; padding: 10px 22px; }
@@ -130,6 +143,19 @@ def paso(numero: int, titulo: str, sub: str = "", activo: bool = True) -> None:
 
 def nota(texto: str) -> None:
     st.markdown(f'<div class="nota">{texto}</div>', unsafe_allow_html=True)
+
+
+def pie_lateral() -> None:
+    """Crédito y mascota, al fondo de la barra lateral."""
+    st.markdown(
+        '<div class="marca">Creado por '
+        '<a href="https://github.com/AmiyaMihari" target="_blank">AmiyaMihari</a>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    mascota = RAIZ / "assets" / "gato.jpeg"
+    if mascota.exists():
+        st.image(str(mascota), width="stretch")
 
 
 # --------------------------------------------------------------------------- #
@@ -185,12 +211,24 @@ def config_google() -> dict | None:
 # --------------------------------------------------------------------------- #
 
 def selector_de_tipo() -> str:
+    # Un cambio de tipo pedido desde otro punto de la página (el botón «Incluir
+    # también…») se aplica aquí: Streamlit prohíbe tocar la clave de un widget
+    # una vez creado, así que se deja pendiente y se resuelve al inicio del
+    # siguiente ciclo, justo antes de instanciarlo.
+    pendiente = st.session_state.pop("modo_pendiente", None)
+    if pendiente:
+        st.session_state.modo = pendiente
+
+    # `default` sólo la primera vez: si el valor ya viene en la sesión (por
+    # ejemplo restaurado al volver de Google), pasar ambos hace que Streamlit
+    # avise por consola de que se está fijando el valor por dos vías.
+    inicial = {} if "modo" in st.session_state else {"default": MODO_DIA}
     modo = st.segmented_control(
         "¿Qué vas a pasar al calendario?",
         options=list(TIPOS),
         format_func=lambda m: TIPOS[m]["etiqueta"],
-        default=MODO_DIA,
         key="modo",
+        **inicial,
     ) or MODO_DIA
     st.caption(TIPOS[modo]["descripcion"])
     return modo
@@ -202,19 +240,15 @@ def selector_de_tipo() -> str:
 
 def barra_lateral(modo: str, dibujar_google: bool = True) -> dict:
     with st.container():
-        mascota = RAIZ / "assets" / "gato.jpeg"
-        if mascota.exists():
-            st.image(str(mascota), width="stretch")
-
         st.markdown("### ⚙️ Ajustes")
         materia = st.text_input(
             "Nombre de la materia",
-            placeholder="Ej. Matemáticas Financieras",
-            help="Se antepone al título de cada evento para distinguirlos en el calendario.",
+            help="Se antepone al título de cada evento y da nombre al calendario "
+                 "nuevo.",
             key="materia",
         )
         zona = st.selectbox("Zona horaria", ZONAS, index=0)
-        etiqueta_rec = st.selectbox("Recordatorio", list(RECORDATORIOS), index=3)
+        etiqueta_rec = st.selectbox("Recordatorio", list(RECORDATORIOS), index=0)
 
         with st.expander("Ajustes avanzados"):
             plantilla = st.text_input(
@@ -294,8 +328,7 @@ def panel_google(actuales: list[Evento] | None = None) -> None:
                 st.code(actual, language=None)
         return
 
-    procesar_regreso_oauth(cfg)
-
+    # El regreso de Google ya se procesó al arrancar main().
     if st.session_state.credenciales:
         correo = st.session_state.get("correo_google", "")
         st.success(f"Conectado{f' como {correo}' if correo else ''}", icon="✅")
@@ -322,7 +355,34 @@ def panel_google(actuales: list[Evento] | None = None) -> None:
             f'<a class="boton-google" href="{url}" target="_self">Conectar con Google</a>',
             unsafe_allow_html=True,
         )
-        st.caption("No perderás lo que llevas: al volver sigue todo aquí.")
+        # Google enseña una pantalla de advertencia porque la app no está
+        # verificada (el trámite exige dominio propio). Sin explicar esto y
+        # cómo seguir, la mayoría se echa para atrás justo aquí.
+        st.markdown(
+            '<div class="aviso-google">'
+            '⚠️ Google te dirá que <b>«no ha verificado esta aplicación»</b>. '
+            'Es normal y puedes continuar:<br><br>'
+            '1. Pulsa <b>Configuración avanzada</b><br>'
+            '2. Luego <b>Ir a Exportar Plan de Trabajo a Google Calendar</b>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        with st.expander("¿Por qué sale eso? ¿Es seguro?"):
+            st.markdown(
+                "Esa pantalla **no significa que la app sea peligrosa**. Google la "
+                "muestra en toda aplicación que no haya pasado su proceso de "
+                "verificación, un trámite que exige dominio propio y aviso de "
+                "privacidad publicado; para un proyecto estudiantil no compensa.\n\n"
+                "Qué puedes comprobar tú:\n\n"
+                "- Tu archivo **no se guarda**: se procesa mientras usas la página.\n"
+                "- El permiso sólo sirve para **crear los eventos que confirmes**.\n"
+                "- Puedes retirárselo cuando quieras en "
+                "[tu cuenta de Google](https://myaccount.google.com/permissions).\n"
+                "- El código es abierto y se puede revisar: "
+                "[github.com/AmiyaMihari](https://github.com/AmiyaMihari/Table_to_google_calendar).\n\n"
+                "Si aun así prefieres no dar permisos, descarga el `.ics` en el "
+                "paso 4: hace exactamente lo mismo."
+            )
 
 
 def procesar_regreso_oauth(cfg: dict) -> None:
@@ -374,8 +434,8 @@ def paso_archivo(modo: str) -> tuple[bytes, str] | None:
     guardados = st.session_state.pop("aviso_guardado", 0)
     if guardados:
         st.success(
-            f"Guardé {guardados} eventos. Ahora **elige arriba el tipo** de la "
-            "siguiente tabla y súbela aquí; al final se exportan todos juntos.",
+            f"Guardé {guardados} eventos. Ahora sube **{TIPOS[modo]['ayuda_archivo']}**; "
+            "al final se exportan todos juntos.",
             icon="✅",
         )
 
@@ -653,29 +713,32 @@ def paso_exportar(ajustes: dict, actuales: list[Evento], modo: str) -> None:
 
     if st.session_state.guardados:
         st.caption(
-            f"Ya se incluyen {len(st.session_state.guardados)} eventos de tablas "
-            "anteriores; no hace falta volver a añadirlos."
+            f"Incluye {len(st.session_state.guardados)} eventos que ya habías "
+            "cargado antes."
         )
 
+    otro = MODO_HORA if modo == MODO_DIA else MODO_DIA
     izq, der = st.columns([3, 2])
     with izq:
         if actuales and st.button(
-            "➕ Guardar éstos y subir otra tabla",
+            f"➕ Incluir también {TIPOS[otro]['corta'].lower()}",
             width="stretch",
-            help="Sólo si tu plan trae las actividades y las videoconferencias en "
-                 "tablas separadas. Los eventos de arriba ya cuentan sin pulsar nada.",
+            help="Si tu plan trae esa información en otra tabla. Guarda lo de "
+                 "ahora y te deja listo para subirla.",
         ):
-            # Los eventos pasan a la lista y se libera el hueco para el siguiente
-            # archivo. Hay que vaciar también el widget: si no, vuelve a cargar
-            # el mismo archivo y los eventos se duplican en cada pulsación.
+            # Se conserva lo hecho, se cambia solo el tipo y se vacía el widget:
+            # si no se vacía, vuelve a cargar el mismo archivo y los eventos se
+            # duplican en cada pulsación.
             st.session_state.guardados = st.session_state.guardados + actuales
             st.session_state.aviso_guardado = len(actuales)
+            st.session_state.modo_pendiente = otro
             olvidar_archivo()
             st.rerun()
     with der:
-        if actuales:
-            st.caption("Los eventos de arriba ya están incluidos; este botón sólo "
-                       "sirve para sumar **otra** tabla distinta.")
+        if st.button("🗑️ Quitar todos los eventos", width="stretch"):
+            st.session_state.guardados = []
+            olvidar_archivo()
+            st.rerun()
 
     with st.expander(f"📋 Ver los {len(eventos)} eventos que se van a crear"):
         st.dataframe(
@@ -687,9 +750,6 @@ def paso_exportar(ajustes: dict, actuales: list[Evento], modo: str) -> None:
             } for ev in eventos]),
             width="stretch", hide_index=True,
         )
-        if st.session_state.guardados and st.button("🗑️ Olvidar las tablas anteriores"):
-            st.session_state.guardados = []
-            st.rerun()
 
     directo, ics, enlaces, csv_google = st.tabs([
         "🚀 Enviar a Google Calendar", "📅 Descargar archivo .ics",
@@ -795,18 +855,26 @@ def pestania_envio_directo(eventos: list[Evento], ajustes: dict) -> None:
         return
 
     nombres = [c["nombre"] + (" (principal)" if c["principal"] else "") for c in calendarios]
+    materia = (ajustes["materia"] or "").strip()
+
+    # Un calendario propio para la materia va primero y elegido por omisión: al
+    # acabar el semestre se oculta o se borra entero sin tocar lo demás. Se pone
+    # siempre primero (no sólo si hay materia) para que el orden de la lista no
+    # dependa de si el campo de la barra lateral ya se aplicó.
     nuevo = "➕ Crear un calendario nuevo para esta materia"
+    opciones = [nuevo] + nombres
 
     izq, der = st.columns([3, 2])
     with izq:
-        elegido = st.selectbox("¿A qué calendario?", nombres + [nuevo])
-        nombre_nuevo = ""
+        elegido = st.selectbox("¿A qué calendario?", opciones)
+        nombre_nuevo = materia
         if elegido == nuevo:
+            # Editable aquí mismo: así no hay que volver a la barra lateral ni
+            # confirmar nada allá para que este nombre sea el correcto.
             nombre_nuevo = st.text_input(
-                "Nombre del calendario",
-                value=ajustes["materia"] or "Actividades SUAyED",
-                help="Tener la materia en su propio calendario te deja ocultarlo o "
-                     "borrarlo completo al terminar el semestre.",
+                "Nombre del calendario nuevo",
+                value=materia or "Actividades SUAyED",
+                key=f"nombre_calendario_{materia}",
             )
     with der:
         evitar = st.checkbox("No duplicar eventos que ya existan", value=True)
@@ -873,6 +941,12 @@ def main() -> None:
     estilos()
     arrancar_estado()
 
+    # Si el usuario viene de autorizar en Google, se procesa antes de dibujar
+    # nada: así lo que traía recuperado ya está disponible para toda la página.
+    cfg_google = config_google()
+    if cfg_google:
+        procesar_regreso_oauth(cfg_google)
+
     st.markdown(
         """
         <div class="bloque-titulo">
@@ -892,9 +966,12 @@ def main() -> None:
         )
 
     modo = selector_de_tipo()
-    # La barra lateral se arma al final, cuando ya sabemos qué eventos hay que
-    # preservar si el usuario se va a autenticar con Google.
-    contenedor_lateral = st.sidebar.container()
+
+    # Conectar con Google va arriba de todo en la barra lateral, pero se dibuja
+    # al final: necesita saber qué eventos hay que preservar durante el viaje a
+    # Google. Se reservan los huecos ahora y se rellenan después.
+    contenedor_google = st.sidebar.container()
+    contenedor_ajustes = st.sidebar.container()
 
     actuales: list[Evento] = []
     archivo = paso_archivo(modo)
@@ -902,42 +979,48 @@ def main() -> None:
         datos, nombre = archivo
         lectura = paso_lectura(datos, nombre)
         if lectura is not None:
-            with contenedor_lateral:
+            with contenedor_ajustes:
                 ajustes = barra_lateral(modo, dibujar_google=False)
             mapeo = paso_mapeo(lectura, modo, ajustes["dayfirst"])
             origen = nombre + (f" · {lectura.hoja}" if lectura.hoja else "")
             actuales = paso_revision(lectura.df, mapeo, modo, ajustes, origen)
         else:
-            with contenedor_lateral:
+            with contenedor_ajustes:
                 ajustes = barra_lateral(modo, dibujar_google=False)
     else:
-        with contenedor_lateral:
+        with contenedor_ajustes:
             ajustes = barra_lateral(modo, dibujar_google=False)
         paso(2, "Configuración manual", "opcional", activo=False)
         paso(3, "Revisa los eventos", "opcional", activo=False)
 
     paso_exportar(ajustes, actuales, modo)
 
-    with st.sidebar:
-        st.divider()
+    with contenedor_google:
         panel_google(actuales)
-        st.markdown(
-            '<div class="marca">Hecho para SUAyED · '
-            '<a href="https://github.com/AmiyaMihari" target="_blank">@AmiyaMihari</a></div>',
-            unsafe_allow_html=True,
-        )
+        st.divider()
+    with st.sidebar:
+        pie_lateral()
 
     with st.expander("❓ Preguntas frecuentes"):
         st.markdown(
             """
-**Tengo actividades y videoconferencias. ¿Hago dos veces el proceso?**
-Sí, y está pensado así: deja arriba **Actividades**, sube esa tabla y pulsa
-*Añadir a mi lista*; luego cambia a **Videoconferencias**, sube la otra y añádela
-también. Los eventos se acumulan y se exportan juntos al final.
+**¿Tengo que confirmar algo para que se creen los eventos?**
+No. Todo lo que ves en el paso 3 ya está incluido; ve directo al paso 4 y elige
+cómo mandarlo a tu calendario.
+
+**Tengo las actividades y las videoconferencias en tablas separadas.**
+Sube la primera y, en el paso 4, pulsa **«Incluir también videoconferencias»**
+(o *actividades*, según lo que falte). Se guarda lo que llevas, se cambia solo
+el tipo, y ya sólo tienes que subir la otra tabla. Al final se exportan juntas.
+
+**Me equivoqué y quiero empezar de cero.**
+En el paso 4, **«Quitar todos los eventos»**. Para cambiar sólo el archivo sin
+perder lo anterior, usa *Quitar archivo* en el paso 1.
 
 **No me lee bien el Excel.**
-Abre «Ajustes de lectura» y corrige la fila donde están los títulos de las
-columnas. Si tu archivo es `.xls` viejo, ábrelo en Excel y guárdalo como `.xlsx`.
+Abre **«Configuración manual»** en el paso 2: ahí puedes corregir en qué fila
+están los títulos de las columnas y qué es cada una. Si tu archivo es `.xls`
+viejo, ábrelo en Excel y guárdalo como `.xlsx`.
 
 **Las fechas salieron en el día equivocado.**
 En la barra lateral, dentro de «Ajustes avanzados», cambia si `03/04/2026` debe
