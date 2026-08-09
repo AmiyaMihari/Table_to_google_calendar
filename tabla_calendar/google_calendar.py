@@ -216,7 +216,11 @@ def url_autorizacion(cfg: dict, datos_sesion: dict | None = None) -> str:
     url, _ = flujo.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
-        prompt="consent",
+        # `select_account` obliga a Google a preguntar con qué cuenta entrar. Sin
+        # esto usa la sesión que el navegador tenga por defecto, que en un equipo
+        # con varias cuentas suele ser la del trabajo; si ésa pertenece a un
+        # Workspace que bloquea apps sin verificar, Google responde 403 a secas.
+        prompt="consent select_account",
     )
     # `authorization_url` genera el code_verifier; hay que conservarlo.
     _estados_pendientes[state] = (ahora, getattr(flujo, "code_verifier", None), datos_sesion)

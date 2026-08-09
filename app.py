@@ -215,10 +215,15 @@ def reiniciar_sesion() -> None:
 
 
 def url_base() -> str:
-    """URL pública de la app, sin parámetros: sirve como redirect_uri de OAuth."""
+    """URL pública de la app, sin parámetros: sirve como redirect_uri de OAuth.
+
+    La ruta vacía se fuerza a «/» porque Google compara el redirect_uri carácter
+    por carácter: en Streamlit Cloud `st.context.url` llega sin diagonal final y
+    dejaba de coincidir con el URI registrado, que sí la lleva.
+    """
     try:
         partes = urlsplit(st.context.url)
-        return urlunsplit((partes.scheme, partes.netloc, partes.path, "", ""))
+        return urlunsplit((partes.scheme, partes.netloc, partes.path or "/", "", ""))
     except Exception:
         return ""
 
