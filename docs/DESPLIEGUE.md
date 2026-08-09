@@ -163,14 +163,14 @@ Para repartir la liga en un grupo grande, **Producción** es lo práctico.
 
 - **Tipo de aplicación**: `Aplicación web`
 - **Nombre**: `streamlit`
-- **URI de redireccionamiento autorizados** → **Agregar URI**, y pega la URL de
-  tu app **con diagonal final**:
+- **URI de redireccionamiento autorizados** → **Agregar URI**. Registra las dos
+  formas de cada dirección, con y sin diagonal final: Google las compara
+  carácter por carácter y basta una diferencia para que rechace la petición.
   ```
-  https://tabla-a-google-calendar.streamlit.app/
-  ```
-  Si también vas a probar en tu computadora, agrega otra:
-  ```
+  https://tu-app.streamlit.app/
+  https://tu-app.streamlit.app
   http://localhost:8501/
+  http://localhost:8501
   ```
 
 Google te muestra el **ID de cliente** y el **Secreto del cliente**. Cópialos.
@@ -233,7 +233,7 @@ no admite la diagonal final y déjalo vacío).
 
 | Síntoma | Causa y arreglo |
 |---|---|
-| `Error 400: redirect_uri_mismatch` | El `redirect_uri` del secreto no es idéntico al registrado en Google Cloud. Revisa `http` vs `https` y la diagonal final. |
+| `Error 400: redirect_uri_mismatch`, o un **403 seco** de Google («no tienes acceso a esta página») | El `redirect_uri` enviado no es idéntico al registrado. La trampa clásica es la **diagonal final**: `st.context.url` llega sin ella en Streamlit Cloud. La app ya la normaliza a `/`, pero registra ambas formas por si acaso. Para ver qué se envía de verdad: clic derecho en «Conectar con Google» → *Copiar dirección del enlace*, y mira el parámetro `redirect_uri`. |
 | `Access blocked: app not verified` sin opción de continuar | La cuenta no está en *Usuarios de prueba* y la app sigue en modo `Prueba`. Agrégala o publica en `Producción`. |
 | «La autorización expiró o no coincide» | El enlace de Google ya se usó o pasaron más de 15 min. Vuelve a pulsar *Conectar con Google*. |
 | `ModuleNotFoundError` al desplegar | Falta la librería en `requirements.txt`, o Streamlit Cloud cacheó el entorno viejo: **Reboot app**. |

@@ -87,12 +87,20 @@ class Evento:
         return txt
 
 
+# Word guarda las viñetas de las fuentes Symbol y Wingdings como caracteres de
+# uso privado (U+E000–U+F8FF): dentro del PDF se ven como un punto, pero fuera
+# no significan nada y el calendario los pinta como cuadritos. Se cambian por
+# una viñeta de verdad. Pasa igual si alguien copia la tabla del PDF a Excel,
+# así que la limpieza vive aquí y no en `pdf.py`.
+_RE_USO_PRIVADO = re.compile(r"[-]+")
+
+
 def _texto(valor) -> str:
     if fechas.es_vacio(valor):
         return ""
     if isinstance(valor, float) and valor == int(valor):
         return str(int(valor))
-    return re.sub(r"\s+", " ", str(valor)).strip()
+    return re.sub(r"\s+", " ", _RE_USO_PRIVADO.sub("•", str(valor))).strip()
 
 
 def formatear_unidad(valor) -> str:

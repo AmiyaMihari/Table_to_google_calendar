@@ -216,7 +216,11 @@ def url_autorizacion(cfg: dict, datos_sesion: dict | None = None) -> str:
     url, _ = flujo.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
-        prompt="consent",
+        # `select_account` obliga a Google a preguntar con qué cuenta entrar. Sin
+        # esto usa la sesión que el navegador tenga por defecto, que en un equipo
+        # con varias cuentas suele ser la del trabajo; si ésa pertenece a un
+        # Workspace que bloquea apps sin verificar, Google responde 403 a secas.
+        prompt="consent select_account",
     )
     # `authorization_url` genera el code_verifier; hay que conservarlo.
     _estados_pendientes[state] = (ahora, getattr(flujo, "code_verifier", None), datos_sesion)
@@ -303,6 +307,12 @@ def crear_calendario(credenciales, nombre: str, zona: str) -> str:
     return creado["id"]
 
 
+def _recortar(texto: str, limite: int) -> str:
+    if len(texto) <= limite:
+        return texto
+    return texto[: limite - 3].rstrip() + "…"
+
+
 def _cuerpo(ev: Evento, zona: str, duracion_horas: float, recordatorio_min: int | None) -> dict:
     if ev.todo_el_dia:
         inicio = {"date": ev.fecha_inicio.isoformat()}
@@ -313,7 +323,11 @@ def _cuerpo(ev: Evento, zona: str, duracion_horas: float, recordatorio_min: int 
 
     cuerpo = {
         "summary": ev.titulo,
-        "description": ev.descripcion or None,
+        # La API rechaza el evento entero si la descripción pasa de 8192
+        # caracteres. Los planes traen descripciones larguísimas (3.500 vistos),
+        # así que se recorta antes: mejor un evento con la descripción a medias
+        # que un evento que no se crea.
+        "description": _recortar(ev.descripcion, 8192) or None,
         "location": ev.lugar or None,
         "start": inicio,
         "end": fin,

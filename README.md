@@ -14,8 +14,15 @@ Eliges arriba qué vas a importar — **📝 Actividades y entregas** o
 **🎥 Videoconferencias y asesorías** — y la app pide sólo los campos de ese tipo.
 Los eventos se acumulan, así que puedes hacer las dos tablas y exportarlas juntas.
 
-Subes el plan en CSV o Excel y la app:
+Subes el plan **en PDF, CSV o Excel** y la app:
 
+- **Lee el PDF tal cual te lo dieron**: busca dentro sus tablas, junta las que
+  cruzan varias páginas y te enseña las que encontró («📝 Actividades — 14
+  filas, págs. 6–24») para que elijas. Si el plan trae una tabla de
+  videoconferencias por grupo, te las ofrece todas **con el nombre del asesor**,
+  que es lo que de verdad te dice cuál es la tuya.
+- **Saca sola el nombre de la materia** del propio plan y lo pone en los
+  eventos; si no acierta, lo cambias en un campo.
 - **Encuentra sola dónde empieza la tabla**, aunque arriba haya logos, títulos o
   filas en blanco.
 - **Adivina qué columna es cuál** mirando el nombre del encabezado *y* el
@@ -28,6 +35,8 @@ Subes el plan en CSV o Excel y la app:
   el día y las asesorías con su horario (`16:00 a 18:00`, `de 4 a 6 pm`).
 - **Rellena las celdas combinadas** de la columna *Unidad*.
 - Te deja **revisar y corregir todo** en una tabla editable antes de exportar.
+- **«Empezar de nuevo»** limpia todo para la siguiente materia sin desconectarte
+  de Google.
 - Junta varias hojas (actividades + asesorías) en una sola lista.
 
 Y luego, a elegir según lo que tengas a la mano:
@@ -67,6 +76,7 @@ Google requiere configurar `secrets.toml`; sin eso todo lo demás funciona igual
 app.py                  Interfaz (los 4 pasos)
 tabla_calendar/         Lógica, sin dependencia de Streamlit
   tablas.py             Lectura de CSV/Excel/ODS + detección de encabezado
+  pdf.py                Reconstrucción de las tablas del PDF
   fechas.py             Fechas y horas en español
   deteccion.py          Mapeo automático de columnas
   modelo.py             Evento y construcción desde la tabla
