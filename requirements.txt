@@ -1,4 +1,4 @@
-streamlit>=1.49
+streamlit>=1.52   # `st.html(unsafe_allow_javascript=...)`, que abre la emergente de OAuth
 pandas>=2.0
 openpyxl>=3.1
 xlrd>=2.0.1

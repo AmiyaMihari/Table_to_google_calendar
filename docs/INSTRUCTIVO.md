@@ -100,8 +100,14 @@ Tienes varios caminos; elige según lo que tengas a la mano:
 ### 🚀 Opción A — Enviar directo (lo más rápido)
 
 1. En la barra de la izquierda, pulsa **Conectar con Google**. Se abre una
-   **pestaña nueva**; acepta el permiso ahí y sigue en esa pestaña, que vuelve
-   sola a la app con tu trabajo tal como lo dejaste.
+   **ventana pequeña**: acepta el permiso ahí y se cierra sola. Tu pestaña de
+   siempre queda conectada, con el archivo y la tabla tal como los dejaste — no
+   la cierres ni la recargues mientras tanto.
+
+   > Si tu navegador bloquea las ventanas emergentes, no pasa nada: debajo del
+   > botón hay un enlace **«¿No se abrió la ventana? Conéctate en otra pestaña»**
+   > que hace lo mismo por el camino de siempre.
+
 2. Elige a qué calendario van. Te recomendamos **➕ Crear un calendario nuevo
    para esta materia**: así, al terminar el semestre, lo ocultas o lo borras
    completo de un clic sin tocar tus otros eventos.

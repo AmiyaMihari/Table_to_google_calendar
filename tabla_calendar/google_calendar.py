@@ -56,6 +56,16 @@ _MAX_PENDIENTES = 200
 # único lugar donde el trabajo del usuario sobrevive el viaje de ida y vuelta.
 _estados_pendientes: dict[str, tuple[float, str | None, dict | None]] = {}
 
+# state -> (momento, credenciales, correo).
+#
+# El viaje a Google ocurre en una ventana emergente, que para Streamlit es una
+# sesión distinta de la que la abrió: no comparten `session_state` ni forma
+# alguna de hablarse desde el navegador (la emergente escapa del sandbox del
+# iframe y queda en otro origen). Lo único que tienen en común es el proceso,
+# así que la emergente deja aquí lo que consiguió y la pestaña original lo
+# recoge sondeando por su `state`.
+_credenciales_listas: dict[str, tuple[float, object, str]] = {}
+
 
 class ErrorGoogle(Exception):
     """Fallo en la conexión con Google, con mensaje para el usuario."""
@@ -194,22 +204,55 @@ def _flow(cfg: dict, state: str | None = None):
 # Autorización
 # --------------------------------------------------------------------------- #
 
-def _purgar(ahora: float) -> None:
-    for viejo in [s for s, (t, _, _) in _estados_pendientes.items()
-                  if ahora - t > _VIGENCIA_ESTADO]:
-        _estados_pendientes.pop(viejo, None)
-    while len(_estados_pendientes) > _MAX_PENDIENTES:
-        _estados_pendientes.pop(min(_estados_pendientes, key=lambda s: _estados_pendientes[s][0]))
+def _purgar(registro: dict, ahora: float) -> None:
+    """Tira lo caducado y lo más viejo si hay demasiado.
+
+    Vale para los dos diccionarios de módulo porque ambos guardan el momento en
+    la primera posición de la tupla. Sin esto crecerían sin fin: nadie recoge
+    los intentos que el usuario abandona a medias.
+    """
+    for viejo in [s for s, datos in registro.items()
+                  if ahora - datos[0] > _VIGENCIA_ESTADO]:
+        registro.pop(viejo, None)
+    while len(registro) > _MAX_PENDIENTES:
+        registro.pop(min(registro, key=lambda s: registro[s][0]))
 
 
-def url_autorizacion(cfg: dict, datos_sesion: dict | None = None) -> str:
-    """URL a la que se manda al usuario para dar permiso.
+def depositar_credenciales(state: str, credenciales, correo: str = "") -> None:
+    """Deja lo conseguido en la emergente para que lo recoja la pestaña original.
+
+    El correo se guarda ya resuelto: quien recoge no debería tener que llamar a
+    la API sólo para saber con qué cuenta se conectó.
+    """
+    ahora = _time.time()
+    _purgar(_credenciales_listas, ahora)
+    _credenciales_listas[state] = (ahora, credenciales, correo)
+
+
+def recoger_credenciales(state: str):
+    """Devuelve (credenciales, correo) de ese `state`, o None si no hay nada.
+
+    Sacarlas es de un solo uso: una vez entregadas no tienen por qué seguir
+    vivas en el proceso.
+    """
+    registro = _credenciales_listas.pop(state, None)
+    if registro is None:
+        return None
+    return registro[1], registro[2]
+
+
+def url_autorizacion(cfg: dict, datos_sesion: dict | None = None) -> tuple[str, str]:
+    """URL a la que se manda al usuario para dar permiso, y su `state`.
 
     `datos_sesion` es lo que el usuario lleva hecho; se guarda aquí para poder
     devolvérselo cuando regrese, porque su sesión de Streamlit no sobrevive.
+
+    El `state` se devuelve porque quien pinta el enlace lo necesita después: es
+    la etiqueta con la que buscará en `_credenciales_listas` lo que la ventana
+    emergente haya dejado.
     """
     ahora = _time.time()
-    _purgar(ahora)
+    _purgar(_estados_pendientes, ahora)
 
     state = secrets.token_urlsafe(24)
     flujo = _flow(cfg, state=state)
@@ -224,7 +267,7 @@ def url_autorizacion(cfg: dict, datos_sesion: dict | None = None) -> str:
     )
     # `authorization_url` genera el code_verifier; hay que conservarlo.
     _estados_pendientes[state] = (ahora, getattr(flujo, "code_verifier", None), datos_sesion)
-    return url
+    return url, state
 
 
 def credenciales_desde_codigo(cfg: dict, codigo: str, state: str | None = None):

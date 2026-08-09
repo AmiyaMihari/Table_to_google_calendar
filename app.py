@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import hashlib
 from datetime import date, datetime, time
+from html import escape
 from pathlib import Path
+# `time` aquí ya es `datetime.time`; para medir la espera de OAuth basta con
+# esto, que además no se descuadra si cambia la hora del sistema.
+from time import monotonic, sleep
 from urllib.parse import urlsplit, urlunsplit
 
 import pandas as pd
@@ -100,6 +104,20 @@ def estilos() -> None:
             padding: 12px 16px; font-size: .9rem; color: #3A4055; margin: 6px 0 14px;
           }
           .marca { font-size: .78rem; color: #767C8F; text-align: center; margin-top: 10px; }
+          /* «Conectar con Google» lo pinta HTML propio y no `st.link_button`
+             porque el clic tiene que abrir la ventana emergente por JavaScript
+             dentro del mismo gesto del usuario, que es la única forma de que el
+             navegador no la bloquee. Ver `panel_google`. */
+          a.boton-google {
+            display: block; width: 100%; box-sizing: border-box;
+            background: #4F46E5; color: #fff !important; text-decoration: none !important;
+            border-radius: 8px; padding: 11px 16px; text-align: center;
+            font-weight: 600; font-size: .95rem; border: 1px solid #4F46E5;
+          }
+          a.boton-google:hover { background: #4338CA; border-color: #4338CA; }
+          /* El botón puente sólo existe para que ese mismo script pueda
+             pulsarlo y avisar al servidor; al usuario no le dice nada. */
+          .st-key-oauth_espera { display: none; }
           /* Streamlit escribe «Press Enter to apply» y no es configurable;
              se oculta y se sustituye por la versión en español. */
           div[data-testid="InputInstructions"] { visibility: hidden; position: relative; }
@@ -335,6 +353,44 @@ AYUDA_SIN_CONFIGURAR = (
     "Mientras tanto, **Descargar archivo .ics** hace exactamente lo mismo."
 )
 
+# Cuánto se sonda esperando a que la ventana emergente traiga el permiso.
+ESPERA_OAUTH = 180
+
+# Va pegado al ancla en el mismo `st.html` —que Streamlit reinserta como
+# `<script>` de verdad cuando se le pide JavaScript—, así que se ejecuta cada vez
+# que el enlace se vuelve a pintar y siempre engancha el ancla recién creada.
+SCRIPT_BOTON_GOOGLE = """
+<script>
+(function () {
+  const anclas = document.querySelectorAll('a.boton-google');
+  const enlace = anclas[anclas.length - 1];
+  if (!enlace || enlace.dataset.enganchado) return;
+  enlace.dataset.enganchado = '1';
+  enlace.addEventListener('click', function (ev) {
+    // Ctrl / Cmd / Mayús: el usuario está pidiendo pestaña o ventana a su
+    // manera. Se le deja hacer.
+    if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+    ev.preventDefault();
+    const emergente = window.open(enlace.href, 'oauth_google',
+                                  'popup,width=520,height=680');
+    // Si un bloqueador la impidió no se toca nada: el href sigue siendo la URL
+    // buena y debajo está el enlace de respaldo, que abre pestaña como antes.
+    if (!emergente) return;
+    emergente.focus();
+    // Se guarda la referencia para poder cerrarla desde aquí al terminar: a
+    // quien abre una ventana siempre se le permite cerrarla, aunque sea de otro
+    // origen. El documento de la app no se recarga entre reejecuciones de
+    // Streamlit, así que la global sobrevive toda la espera.
+    window.__emergenteOAuth = emergente;
+    // Abrir la ventana es cosa del navegador y el servidor no se entera. Este
+    // clic sintético sobre el botón oculto es el único aviso posible de que ya
+    // puede ponerse a esperar.
+    document.querySelector('.st-key-oauth_espera button')?.click();
+  });
+})();
+</script>
+"""
+
 
 def boton_empezar_de_nuevo() -> None:
     """Reinicio rápido, al principio de la barra lateral.
@@ -386,12 +442,25 @@ def panel_google(actuales: list[Evento] | None = None) -> None:
             for clave in ("credenciales", "correo_google"):
                 st.session_state.pop(clave, None)
             st.rerun()
+    elif st.session_state.get("esperando_oauth"):
+        # Mientras dura el sondeo no se genera URL nueva: cada una deja un
+        # `state` en el proceso y se llenaría de intentos que nadie va a usar.
+        st.info(
+            "Termina de autorizar en la ventana emergente. En cuanto aceptes se "
+            "cierra sola y esta página queda conectada, con tu trabajo intacto.",
+            icon="⏳",
+        )
+        if st.button("Cancelar", width="stretch"):
+            st.session_state.pop("esperando_oauth", None)
+            st.rerun()
+        aviso_app_sin_verificar()
     else:
         try:
-            # Al ir a Google el navegador recarga la página y Streamlit pierde la
-            # sesión, así que el trabajo del usuario viaja guardado junto al
-            # `state` de OAuth y se restaura al volver.
-            url = gcal.url_autorizacion(cfg, datos_sesion={
+            # Aunque el permiso se da en otra ventana, el trabajo del usuario
+            # viaja igual junto al `state`: si la emergente no logra cerrarse, o
+            # si se usó el enlace de respaldo, esa ventana acaba siendo la app y
+            # tiene que poder devolvérselo.
+            url, state = gcal.url_autorizacion(cfg, datos_sesion={
                 "guardados": st.session_state.guardados + list(actuales or []),
                 "materia": st.session_state.get("materia", ""),
                 "modo": st.session_state.get("modo"),
@@ -399,42 +468,64 @@ def panel_google(actuales: list[Evento] | None = None) -> None:
         except gcal.ErrorGoogle as e:
             st.error(str(e))
             return
-        # Pestaña nueva a la fuerza: Streamlit Cloud sirve la app dentro de un
-        # iframe con `sandbox` sin `allow-top-navigation`, y Google responde 403
-        # a su pantalla de inicio de sesión cuando va enmarcada. Se usa
-        # `st.link_button` —que siempre abre `_blank`— y no un `<a>` propio,
-        # porque `st.html` sanitiza con DOMPurify y borra el atributo `target`.
-        # El regreso cae en una sesión limpia, pero `_estados_pendientes`
-        # devuelve el trabajo del usuario.
-        st.link_button("Conectar con Google", url, type="primary", width="stretch")
-        # Google enseña una pantalla de advertencia porque la app no está
-        # verificada (el trámite exige dominio propio). Sin explicar esto y
-        # cómo seguir, la mayoría se echa para atrás justo aquí.
-        st.markdown(
-            '<div class="aviso-google">'
-            '⚠️ Google te dirá que <b>«no ha verificado esta aplicación»</b>. '
-            'Es normal y puedes continuar:<br><br>'
-            '1. Pulsa <b>Configuración avanzada</b><br>'
-            '2. Luego <b>Ir a Exportar Plan de Trabajo a Google Calendar</b>'
-            '</div>',
-            unsafe_allow_html=True,
+        # Cada ejecución pinta un enlace con `state` nuevo y el usuario pudo
+        # pulsar cualquiera de los anteriores (la página se redibuja sola a cada
+        # rato), así que se recuerdan los últimos y se buscan todos al recoger.
+        estados = st.session_state.setdefault("estados_oauth", [])
+        estados.append(state)
+        del estados[:-20]
+        # Ancla propia y no `st.link_button` porque la ventana emergente hay que
+        # abrirla con `window.open` dentro del mismo gesto del clic —si no, el
+        # navegador la bloquea—, y el `<a>` de `st.link_button` además lleva
+        # `rel="noreferrer"`, que le impediría cerrarse sola al terminar.
+        # Navegar en la misma ventana no es opción: en Streamlit Cloud la app va
+        # dentro de un iframe cuyo `sandbox` no trae `allow-top-navigation`, y
+        # Google responde 403 a su pantalla de inicio de sesión si va enmarcada.
+        st.html(
+            f'<a class="boton-google" href="{escape(url, quote=True)}">'
+            "Conectar con Google</a>" + SCRIPT_BOTON_GOOGLE,
+            unsafe_allow_javascript=True,
         )
-        with st.expander("¿Por qué sale eso? ¿Es seguro?"):
-            st.markdown(
-                "Esa pantalla **no significa que la app sea peligrosa**. Google la "
-                "muestra en toda aplicación que no haya pasado su proceso de "
-                "verificación, un trámite que exige dominio propio y aviso de "
-                "privacidad publicado; para un proyecto estudiantil no compensa.\n\n"
-                "Qué puedes comprobar tú:\n\n"
-                "- Tu archivo **no se guarda**: se procesa mientras usas la página.\n"
-                "- El permiso sólo sirve para **crear los eventos que confirmes**.\n"
-                "- Puedes retirárselo cuando quieras en "
-                "[tu cuenta de Google](https://myaccount.google.com/permissions).\n"
-                "- El código es abierto y se puede revisar: "
-                "[github.com/AmiyaMihari](https://github.com/AmiyaMihari/Table_to_google_calendar).\n\n"
-                "Si aun así prefieres no dar permisos, descarga el `.ics` en el "
-                "paso 4: hace exactamente lo mismo."
-            )
+        # El camino de siempre, por si un bloqueador impidió la emergente.
+        st.link_button(
+            "¿No se abrió la ventana? Conéctate en otra pestaña",
+            url, type="tertiary", width="stretch",
+        )
+        aviso_app_sin_verificar()
+
+
+def aviso_app_sin_verificar() -> None:
+    """Google enseña una pantalla de advertencia porque la app no está verificada.
+
+    El trámite exige dominio propio. Sin explicar esto y cómo seguir, la mayoría
+    se echa para atrás justo aquí, así que el aviso acompaña tanto al botón como
+    a la espera de la ventana emergente: es entonces cuando se topan con ella.
+    """
+    st.markdown(
+        '<div class="aviso-google">'
+        '⚠️ Google te dirá que <b>«no ha verificado esta aplicación»</b>. '
+        'Es normal y puedes continuar:<br><br>'
+        '1. Pulsa <b>Configuración avanzada</b><br>'
+        '2. Luego <b>Ir a Exportar Plan de Trabajo a Google Calendar</b>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    with st.expander("¿Por qué sale eso? ¿Es seguro?"):
+        st.markdown(
+            "Esa pantalla **no significa que la app sea peligrosa**. Google la "
+            "muestra en toda aplicación que no haya pasado su proceso de "
+            "verificación, un trámite que exige dominio propio y aviso de "
+            "privacidad publicado; para un proyecto estudiantil no compensa.\n\n"
+            "Qué puedes comprobar tú:\n\n"
+            "- Tu archivo **no se guarda**: se procesa mientras usas la página.\n"
+            "- El permiso sólo sirve para **crear los eventos que confirmes**.\n"
+            "- Puedes retirárselo cuando quieras en "
+            "[tu cuenta de Google](https://myaccount.google.com/permissions).\n"
+            "- El código es abierto y se puede revisar: "
+            "[github.com/AmiyaMihari](https://github.com/AmiyaMihari/Table_to_google_calendar).\n\n"
+            "Si aun así prefieres no dar permisos, descarga el `.ics` en el "
+            "paso 4: hace exactamente lo mismo."
+        )
 
 
 def procesar_regreso_oauth(cfg: dict) -> None:
@@ -456,6 +547,15 @@ def procesar_regreso_oauth(cfg: dict) -> None:
     st.session_state.credenciales = credenciales
     st.session_state.correo_google = gcal.correo_usuario(credenciales)
 
+    # Lo más probable es que esta ejecución sea la de la ventana emergente, que
+    # para Streamlit es una sesión aparte: se deja copia en el proceso para que
+    # la pestaña que la abrió la recoja y se conecte sin perder nada. Restaurar
+    # la sesión propia no sobra —es lo que salva el caso de que la emergente no
+    # consiga cerrarse, o el del enlace de respaldo en pestaña nueva.
+    if estado:
+        gcal.depositar_credenciales(estado, credenciales, st.session_state.correo_google)
+    st.session_state.cerrar_si_es_emergente = True
+
     # Devolverle al usuario lo que tenía antes de salir a Google.
     if datos:
         st.session_state.guardados = datos.get("guardados") or []
@@ -467,6 +567,86 @@ def procesar_regreso_oauth(cfg: dict) -> None:
 
     st.query_params.clear()
     st.rerun()
+
+
+def despedir_ventana_emergente() -> None:
+    """Cierra la ventana si esta ejecución resultó ser la emergente de OAuth.
+
+    `close()` sólo obedece en ventanas abiertas por script, así que en una
+    pestaña normal no ocurre nada y el usuario se queda aquí como siempre. Se
+    hace en la ejecución siguiente al canje y no dentro de `procesar_regreso_oauth`
+    porque aquélla termina en `st.rerun()`, que se llevaría el script por delante.
+    """
+    if not st.session_state.pop("cerrar_si_es_emergente", False):
+        return
+    # Un aviso que se desvanece: cuando la ventana sí se cierra nadie lo llega a
+    # leer, y cuando no (el iframe de la nube no siempre puede cerrar su ventana)
+    # dice lo único que hace falta saber.
+    st.toast("Conexión lista. Si esta ventana no se cierra sola, ya puedes "
+             "cerrarla y volver a la pestaña donde estabas.", icon="✅")
+    st.html(
+        "<script>try { window.top.close(); } catch (e) {}</script>",
+        unsafe_allow_javascript=True,
+    )
+
+
+def recoger_credenciales_de_la_emergente() -> None:
+    """Trae el permiso que la ventana emergente dejó en el proceso, si ya llegó.
+
+    Se mira en todas las ejecuciones y no sólo mientras dura el sondeo: si la
+    espera se agotó y el usuario autoriza más tarde, el primer clic que dé aquí
+    lo conecta igual.
+    """
+    if st.session_state.credenciales:
+        return
+    for estado in st.session_state.get("estados_oauth", []):
+        recogido = gcal.recoger_credenciales(estado)
+        if recogido is None:
+            continue
+        st.session_state.credenciales, st.session_state.correo_google = recogido
+        st.session_state.pop("esperando_oauth", None)
+        st.session_state.pop("estados_oauth", None)
+        # El cierre no se emite aquí: cualquier `st.rerun()` de más abajo se
+        # llevaría el script por delante. Se deja pendiente para el final del
+        # ciclo, que es donde ya nada puede tragárselo.
+        st.session_state.cerrar_emergente_pendiente = True
+        st.toast("Conectado con Google", icon="✅")
+        return
+
+
+def cerrar_emergente_desde_el_abridor() -> None:
+    """Cierra la ventana emergente desde la pestaña que la abrió.
+
+    Es el segundo camino del cierre, y el que sí es legal siempre: al popup se
+    le permite cerrarse a sí mismo sólo si puede navegar su ventana completa, y
+    en la nube va dentro de un iframe con `sandbox` donde eso falla en silencio;
+    en cambio a quien abrió una ventana nunca se le niega cerrarla, aunque sea
+    de otro origen. Con los dos caminos basta con que funcione cualquiera.
+    """
+    if not st.session_state.pop("cerrar_emergente_pendiente", False):
+        return
+    st.html(
+        "<script>try {"
+        "  if (window.__emergenteOAuth && !window.__emergenteOAuth.closed)"
+        "    window.__emergenteOAuth.close();"
+        "  window.__emergenteOAuth = null;"
+        "} catch (e) {}</script>",
+        unsafe_allow_javascript=True,
+    )
+
+
+def boton_puente_oauth(configurado: bool) -> None:
+    """Botón invisible al que el script del enlace le da un clic sintético.
+
+    Es la única manera de que el servidor se entere de que la ventana emergente
+    se abrió: abrirla es cosa del navegador y Streamlit no ve nada. Vive en
+    `main()` —y no junto al enlace— para que se pinte exactamente una vez por
+    ejecución: su clave es única y `panel_google` tiene dos puntos de llamada.
+    """
+    if not configurado or st.session_state.credenciales:
+        return
+    if st.button("Esperando la autorización de Google", key="oauth_espera"):
+        st.session_state.esperando_oauth = monotonic()
 
 
 # --------------------------------------------------------------------------- #
@@ -1180,6 +1360,9 @@ def main() -> None:
     cfg_google = config_google()
     if cfg_google:
         procesar_regreso_oauth(cfg_google)
+    despedir_ventana_emergente()
+    recoger_credenciales_de_la_emergente()
+    boton_puente_oauth(bool(cfg_google))
 
     st.markdown(
         """
@@ -1299,6 +1482,30 @@ No. El archivo se procesa en memoria mientras usas la página y no se almacena.
 El permiso de Google sólo se usa para crear los eventos que confirmes.
             """
         )
+
+    # Ya no queda nada que pueda reejecutar y tragarse el script, así que aquí
+    # es donde se cierra la emergente si la recogida acaba de conectar. Sigue
+    # siendo el mismo ciclo: se cierra en cuanto el usuario autoriza, no en la
+    # siguiente vez que toque algo.
+    cerrar_emergente_desde_el_abridor()
+
+    # El sondeo va al final del todo, con la página ya dibujada: el permiso lo
+    # trae la ventana emergente, que es otra sesión, y no hay forma de que el
+    # servidor avise por su cuenta de que llegó. Volver a ejecutar cada dos
+    # segundos es el sustituto pobre —pero sin dependencias— de ese aviso; si
+    # estuviera arriba, la pausa retrasaría el dibujado entero.
+    espera = st.session_state.get("esperando_oauth")
+    if espera:
+        if monotonic() - espera < ESPERA_OAUTH:
+            sleep(2)
+            st.rerun()
+        # Se acabó la paciencia: se reejecuta una vez más para que vuelva a salir
+        # el botón, porque si no la barra lateral se queda diciendo «termina de
+        # autorizar» sin sondear ya nada. Y si el usuario autoriza más tarde no
+        # se pierde nada: `recoger_credenciales_de_la_emergente` lo conecta en
+        # cuanto toque cualquier cosa.
+        st.session_state.pop("esperando_oauth", None)
+        st.rerun()
 
 
 if __name__ == "__main__":
