@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 from datetime import date, datetime, time
-from html import escape
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -101,16 +100,6 @@ def estilos() -> None:
             padding: 12px 16px; font-size: .9rem; color: #3A4055; margin: 6px 0 14px;
           }
           .marca { font-size: .78rem; color: #767C8F; text-align: center; margin-top: 10px; }
-          /* st.link_button siempre abre pestaña nueva y no se puede cambiar; con
-             OAuth eso deja al usuario con dos pestañas y la original a medias.
-             Este enlace navega en la misma. */
-          a.boton-google {
-            display: block; width: 100%; box-sizing: border-box;
-            background: #4F46E5; color: #fff !important; text-decoration: none !important;
-            border-radius: 8px; padding: 11px 16px; text-align: center;
-            font-weight: 600; font-size: .95rem; border: 1px solid #4F46E5;
-          }
-          a.boton-google:hover { background: #4338CA; border-color: #4338CA; }
           /* Streamlit escribe «Press Enter to apply» y no es configurable;
              se oculta y se sustituye por la versión en español. */
           div[data-testid="InputInstructions"] { visibility: hidden; position: relative; }
@@ -410,18 +399,14 @@ def panel_google(actuales: list[Evento] | None = None) -> None:
         except gcal.ErrorGoogle as e:
             st.error(str(e))
             return
-        # `st.html` y no `st.markdown`: éste último procesa markdown, y el
-        # `state` de OAuth lleva guiones bajos que se pueden interpretar como
-        # cursiva y romper el enlace. Los `&` se escapan como manda HTML.
-        #
-        # target="_top" y no "_self": Google rechaza sus pantallas de inicio de
-        # sesión dentro de un iframe (responde 403), y Streamlit Cloud sirve la
-        # app enmarcada en algunos casos. "_top" navega la ventana completa, y
-        # cuando no hay iframe se comporta igual que "_self".
-        st.html(
-            f'<a class="boton-google" href="{escape(url, quote=True)}" '
-            'target="_top" rel="noopener">Conectar con Google</a>'
-        )
+        # Pestaña nueva a la fuerza: Streamlit Cloud sirve la app dentro de un
+        # iframe con `sandbox` sin `allow-top-navigation`, y Google responde 403
+        # a su pantalla de inicio de sesión cuando va enmarcada. Se usa
+        # `st.link_button` —que siempre abre `_blank`— y no un `<a>` propio,
+        # porque `st.html` sanitiza con DOMPurify y borra el atributo `target`.
+        # El regreso cae en una sesión limpia, pero `_estados_pendientes`
+        # devuelve el trabajo del usuario.
+        st.link_button("Conectar con Google", url, type="primary", width="stretch")
         # Google enseña una pantalla de advertencia porque la app no está
         # verificada (el trámite exige dominio propio). Sin explicar esto y
         # cómo seguir, la mayoría se echa para atrás justo aquí.
