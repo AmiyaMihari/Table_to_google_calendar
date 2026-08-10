@@ -120,16 +120,12 @@ contra los cinco PDFs.
 
 Se sube el PDF y la app enseña las tablas **agrupadas** (no las 43 sueltas:
 quedan dos o tres candidatas reales, tipo «📝 Actividades — 14 filas, págs.
-6–24»). Al elegir una de videoconferencias, el tipo de importación cambia solo.
+6–24»), **cada una con su casilla**: se marcan varias y se exportan juntas. Cada
+tabla trae su tipo, y los pasos 2 y 3 le dan una pestaña a cada una.
 
 Cuando hay una tabla por grupo, la etiqueta lleva **el nombre del asesor** junto
 al número: nadie se sabe su número de grupo de memoria, pero a su asesor sí lo
 reconoce. Y el **nombre de la materia** se saca de la portada y se rellena solo.
-
-Como un PDF trae **las dos tablas a la vez**, «Incluir también…» del paso 4 ya
-no obliga a volver a subir nada: salta a la otra tabla del mismo archivo. Eso sí,
-tiene que cambiar de tabla — dejar la misma seleccionada duplicaría sus eventos
-al exportar.
 
 `pdfplumber` ya está en `requirements.txt`. Arrastra `pdfminer.six`, ~15 MB.
 
@@ -157,9 +153,10 @@ Vigilar el contador en **Google Auth Platform → Público**.
 
 ## 3. Menores
 
-- **Segunda tabla de actividades.** El botón «Incluir también…» siempre cambia
-  al otro tipo. Quien tenga dos tablas de actividades (dos materias) tiene que
-  volver a cambiar el tipo a mano. Poco frecuente; ver si molesta.
+- **Varias hojas de un mismo Excel.** De un PDF se marcan varias tablas de golpe,
+  pero de un Excel sólo se trabaja una hoja a la vez: para la segunda hay que
+  pasar por «➕ Añadir otro archivo» y volver a subirlo. Poco frecuente; ver si
+  molesta.
 - **Aviso de app dormida.** Las apps gratuitas se duermen sin visitas y la
   primera persona ve «This app has gone to sleep». Está avisado en el
   instructivo, pero conviene repetirlo al compartir la liga.

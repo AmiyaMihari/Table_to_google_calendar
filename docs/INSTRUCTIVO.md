@@ -32,43 +32,51 @@ También acepta **CSV y Excel**:
 
 ---
 
-## Paso 1 · Sube tu archivo y di qué es
+## Paso 1 · Sube tu archivo y marca qué pasar al calendario
 
 Arrastra el archivo al recuadro, o pulsa para buscarlo.
 
 Formatos aceptados: `.pdf`, `.xlsx`, `.xlsm`, `.xls`, `.ods`, `.csv`.
 
-En cuanto lo lee, te pregunta **«¿Qué quieres pasar al calendario?»**. Ésta es la
-decisión más importante, porque cambia todo lo que la app te pide después — pero
-no tienes que pensarla: **viene contestada** y casi siempre acierta.
+En cuanto lo lee, te pregunta **«¿Qué quieres pasar al calendario?»** — y no
+tienes que pensarla mucho: **viene contestada** y casi siempre acierta.
 
 | Opción | Para qué | Cómo quedan en el calendario |
 |---|---|---|
 | 📝 **Actividades y entregas** | La tabla de tareas con fecha límite | Eventos de **todo el día** |
 | 🎥 **Videoconferencias y asesorías** | La tabla de sesiones con horario | Eventos **con hora de inicio y fin** |
 
-- **Si subiste el PDF**, la pregunta son las tablas que encontró dentro
-  («📝 Actividades — 14 filas, págs. 6–24», «🎥 Videoconferencias · grupo 8396 ·
-  *nombre de tu asesora*»). Eliges una y con eso queda dicho todo. Si tu plan
-  trae una tabla de videoconferencias por grupo, elige la de tu asesor.
+- **Si subiste el PDF**, verás las tablas que encontró dentro, **cada una con su
+  casilla** («📝 Actividades — 14 filas, págs. 6–24», «🎥 Videoconferencias ·
+  grupo 8396 · *nombre de tu asesora*»). **Marca todas las que quieras**: se
+  pasan al calendario juntas, y no hace falta subir el archivo dos veces.
+  - Las **actividades** vienen marcadas de entrada.
+  - Las **videoconferencias** también, si sólo hay una tabla. Si tu plan trae
+    una por grupo no marco ninguna: **elige la de tu asesor**, que aparece con
+    su nombre al lado del número de grupo.
 - **Si subiste CSV o Excel**, la app mira tu tabla: si trae una columna de
   horarios propone *Videoconferencias*, y si no, *Actividades*. Si se equivoca,
   la corriges con un clic. En un Excel con varias hojas, elige primero la hoja
   —cada una puede ser de un tipo distinto— y la propuesta se recalcula.
 
-Verás un mensaje verde: *«Tabla leída: 12 filas y 4 columnas»*. Si el número de
-filas se ve raro, lo arreglas en el paso 2.
+Verás un mensaje verde: *«Tabla leída: 12 filas y 4 columnas»*, o *«Leí 18 filas
+en total»* si marcaste varias. Si el número de filas se ve raro, lo arreglas en
+el paso 2.
 
-> 💡 **¿Tienes las dos cosas?** Es lo normal, y está previsto: empieza por las
-> actividades y, cuando llegues al final, pulsa **«➕ Incluir también
-> videoconferencias»**. La app guarda lo que llevas y te lleva a la otra tabla:
-> si subiste el PDF, ya la tiene dentro y salta sola; si no, sólo te pide que
-> subas la otra. **Al final se exportan todas juntas.**
+> 💡 **¿Tienes las dos cosas en archivos distintos?** Sube el primero y, al final
+> del paso 1, pulsa **«➕ Añadir otro archivo»**: te dice cuántos eventos llevas,
+> los guarda y te deja el recuadro libre para el siguiente. **Al final se
+> exportan todos juntos.** (Si las dos tablas venían en el mismo PDF, esto no
+> hace falta: márcalas juntas y ya.)
 
 ## Paso 2 · Revisa qué es cada columna
 
+Si marcaste varias tablas, aquí aparece **una pestaña por tabla** («📝
+Actividades», «🎥 Videoconferencias · grupo 8396…»). Lo que sigue vale para cada
+una por separado.
+
 La app **ya detectó sola** qué columna es cuál, y sólo te muestra los campos que
-importan para el tipo que elegiste:
+importan para el tipo de esa tabla:
 
 - **Actividades** → Fecha de entrega, Nombre de la actividad, Unidad, Descripción.
 - **Videoconferencias** → Fecha de la sesión, Nombre de la sesión, Hora de inicio,
@@ -80,10 +88,16 @@ opcionales»** para no estorbar.
 Casi siempre acierta. Sólo revisa que la **Fecha** apunte a la columna correcta;
 si algo está mal, cámbialo en el menú desplegable.
 
+Aquí mismo, arriba de todo, está el **tipo de esa tabla** por si el PDF la
+clasificó al revés (por ejemplo, unas asesorías tratadas como entregas): cámbialo
+y toda la pantalla se acomoda sola. Y dentro del desplegable está la **plantilla
+del título** de los eventos de ese tipo, con `{materia}`, `{unidad}` y `{titulo}`.
+
 ## Paso 3 · Revisa y corrige
 
-Aparece la tabla con los eventos ya armados y tres contadores:
-**filas leídas**, **eventos listos** y **necesitan revisión**.
+Aparece la tabla con los eventos ya armados —**una pestaña por tabla**, si
+marcaste varias— y los contadores de **filas leídas**, **eventos listos** y los
+que **necesitan revisión**, tanto de cada tabla como del total.
 
 Todo aquí es **editable**. Puedes:
 
@@ -176,8 +190,11 @@ sin año»*.
 
 **Los títulos salen muy largos o muy cortos**
 Escribe el nombre de la materia en la barra lateral, y si quieres cambia la
-*Plantilla del título* en Ajustes avanzados. Puedes usar `{materia}`, `{unidad}`
-y `{titulo}`.
+*Plantilla del título* dentro de «Configuración manual», en el paso 2 (cada tipo
+de evento tiene la suya). Puedes usar `{materia}`, `{unidad}` y `{titulo}`.
+
+**Una tabla del PDF quedó del tipo equivocado**
+En el paso 2, arriba de «Configuración manual», cambia el **tipo de esa tabla**.
 
 **Me equivoqué y ya importé todo**
 Si creaste un calendario nuevo para la materia, bórralo completo desde Google

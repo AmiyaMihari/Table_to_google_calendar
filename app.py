@@ -7,6 +7,7 @@ actividades y las videoconferencias a tu Google Calendar de un botón.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from html import escape
 from pathlib import Path
@@ -50,18 +51,14 @@ RECORDATORIOS = {
 # Todo lo que cambia entre los dos tipos de importación, en un solo lugar.
 TIPOS = {
     MODO_DIA: {
+        "icono": "📝",
         "etiqueta": "📝  Actividades y entregas",
-        "corta": "Actividades",
         "descripcion": "Tareas con fecha límite. Se crean como eventos de **todo el día**.",
-        "ayuda_archivo": "la tabla de actividades con su fecha de entrega",
-        "ejemplo": "razonamiento_logico.csv",
     },
     MODO_HORA: {
+        "icono": "🎥",
         "etiqueta": "🎥  Videoconferencias y asesorías",
-        "corta": "Videoconferencias",
         "descripcion": "Sesiones con horario. Se crean como eventos **con hora de inicio y fin**.",
-        "ayuda_archivo": "la tabla de sesiones con su fecha y su horario",
-        "ejemplo": "videoconferencias_ejemplo.csv",
     },
 }
 
@@ -186,8 +183,6 @@ def arrancar_estado() -> None:
     st.session_state.setdefault("hoja", None)
     st.session_state.setdefault("fila_encabezado", None)
     st.session_state.setdefault("firma_archivo", "")
-    # Cuál de las tablas del PDF eligió el usuario.
-    st.session_state.setdefault("tabla_pdf", 0)
     # De qué archivo ya sacamos el nombre de la materia (para sugerirlo una vez).
     st.session_state.setdefault("materia_sugerida", None)
 
@@ -250,23 +245,67 @@ def config_google() -> dict | None:
 
 
 # --------------------------------------------------------------------------- #
-# El tipo de importación — la decisión que gobierna todo lo demás
+# Las tablas activas — qué se está pasando al calendario ahora mismo
 # --------------------------------------------------------------------------- #
 
-def modo_vigente() -> str:
-    """El tipo de importación que rige ahora mismo.
+@dataclass
+class TablaActiva:
+    """Una tabla en curso: la del CSV o el Excel, o cada tabla marcada del PDF.
 
-    La decisión se toma dentro del paso 1, ya con el archivo delante, que es
-    cuando la app puede proponerla ella sola. Pero hace falta un valor **antes**:
-    la barra lateral se dibuja siempre y necesita saber de qué modo es la
-    plantilla del título. Mientras tanto vale el de la sesión —el que quedó de la
-    tabla anterior, o el que se restauró al volver de Google— y, a falta de él,
-    actividades, que es con lo que empieza casi todo el mundo.
+    Es la unidad de trabajo de los pasos 2, 3 y 4: cada una trae su tipo, su
+    mapeo de columnas y su editor, y al exportar se suman todas.
 
-    Ojo con el orden en `main()`: esto escribe `modo`, y `procesar_regreso_oauth`
-    sólo restaura el que traía el usuario si la clave aún no está puesta.
+    **No vive en `session_state`.** Se reconstruye entera en cada ciclo a partir
+    del archivo —el PDF pasa por `_tablas_del_pdf`, que está cacheado—, y en la
+    sesión sólo quedan las claves de los widgets que deciden qué tablas están
+    marcadas y de qué tipo es cada una. Un DataFrame guardado aparte sería una
+    copia que envejece a espaldas del archivo y de la fila de encabezado.
     """
-    return st.session_state.setdefault("modo", MODO_DIA)
+
+    df: pd.DataFrame
+    modo: str
+    # Cómo se llama esta tabla para el usuario: la hoja del Excel, el nombre del
+    # archivo, o el que le puso `pdf.py` («Videoconferencias · grupo 8396 · …»).
+    nombre: str
+    # De dónde salió cada evento; viaja dentro del `Evento` hasta el paso 4.
+    origen: str
+    # Firma estable de la tabla: raíz de todas sus claves de widget. Lleva
+    # dentro la firma del archivo, así que al cambiar de archivo Streamlit poda
+    # solo las claves viejas y ninguna elección se arrastra a la tabla nueva.
+    clave: str
+    # Sólo CSV y Excel: en qué fila están los títulos, que el paso 2 deja
+    # corregir. En el PDF los reconstruye `pdf.py` y no hay nada que ajustar.
+    fila_encabezado: int | None = None
+    # Sólo PDF: el tipo que propuso `Candidata.modo`. Que no sea None es lo que
+    # hace que el paso 2 dibuje el corrector — en CSV y Excel el tipo ya se
+    # preguntó arriba, en el paso 1, y preguntarlo dos veces sobraría.
+    tipo_propuesto: str | None = None
+
+    @property
+    def etiqueta(self) -> str:
+        """Nombre con icono, para la pestaña de los pasos 2 y 3."""
+        return f"{TIPOS[self.modo]['icono']} {self.nombre}"
+
+
+def modo_de(clave: str, propuesto: str) -> str:
+    """El tipo que rige para una tabla: el que corrigió el usuario, o el propuesto.
+
+    La corrección vive en la clave de un widget (`tipo_<clave>`), que Streamlit
+    poda en cuanto ese widget deja de dibujarse: al desmarcar una tabla del PDF
+    o cambiar de archivo, la corrección se va con ella y la siguiente vuelve a
+    partir de la propuesta. Es justo lo que se quiere.
+    """
+    return st.session_state.get(f"tipo_{clave}") or propuesto
+
+
+def plantilla_de(modo: str) -> str:
+    """La plantilla del título vigente para un tipo de evento.
+
+    Vive en la clave del `text_input` que dibuja el paso 2 (`plantilla_<modo>`),
+    una por tipo y no una por tabla: dos tablas de videoconferencias son el
+    mismo tipo de evento y titularlas distinto no tendría sentido.
+    """
+    return st.session_state.get(f"plantilla_{modo}") or PLANTILLAS[modo]
 
 
 def adivinar_tipo(df: pd.DataFrame) -> str:
@@ -287,43 +326,64 @@ def adivinar_tipo(df: pd.DataFrame) -> str:
     return MODO_HORA if deteccion.hay_horarios(df, mapeo["hora"]) else MODO_DIA
 
 
-def selector_de_tipo_de_tabla(df: pd.DataFrame) -> None:
+def selector_de_tipo_de_tabla(df: pd.DataFrame, clave: str) -> str:
     """La pregunta del paso 1 para CSV y Excel, ya con una respuesta puesta.
 
-    Con un PDF no se dibuja: allí elegir tabla es elegir tipo (ver
-    `paso_lectura_pdf`) y preguntarlo dos veces sobraba.
+    Con un PDF no se dibuja: allí cada tabla trae su tipo escrito
+    (`Candidata.modo`), y quien quiera desmentirlo tiene el corrector del paso 2.
     """
-    # Clave propia por archivo y hoja en vez de `key="modo"`, por dos razones. La
-    # de fondo: Streamlit borra de la sesión la clave de un widget que deja de
-    # dibujarse, y este widget desaparece en cuanto el archivo es un PDF, así que
-    # `modo` —de la que dependen la plantilla, el editor y el viaje a Google— se
-    # perdería a mitad del camino. La otra: una tabla nueva merece una propuesta
-    # nueva, y con la clave atada al archivo la elección de la anterior no se
-    # arrastra.
-    clave = "tipo_" + firma(st.session_state.firma_archivo, st.session_state.hoja)
+    # La propuesta se calcula una sola vez por tabla y se guarda: `adivinar_tipo`
+    # recorre el DataFrame entero y esto se dibuja en cada ciclo. La clave no es
+    # de widget, así que sobrevive aunque el `segmented_control` se pode.
+    clave_propuesta = f"prop_{clave}"
+    if clave_propuesta not in st.session_state:
+        st.session_state[clave_propuesta] = adivinar_tipo(df)
+    propuesto = st.session_state[clave_propuesta]
+
+    # Clave por tabla y no una global: Streamlit borra de la sesión la clave de
+    # un widget que deja de dibujarse, y éste desaparece en cuanto el archivo es
+    # un PDF; además, así una tabla nueva estrena propuesta en vez de heredar la
+    # elección de la anterior.
+    clave_widget = f"tipo_{clave}"
     # `default` sólo la primera vez, o Streamlit avisa de que el valor se está
-    # fijando por dos vías. Esa primera vez es justo cuando se adivina: a partir
-    # de ahí manda lo que haya dejado el usuario.
-    inicial = {} if clave in st.session_state else {"default": adivinar_tipo(df)}
+    # fijando por dos vías. A partir de ahí manda lo que haya dejado el usuario.
+    inicial = {} if clave_widget in st.session_state else {"default": propuesto}
     elegido = st.segmented_control(
         "¿Qué quieres pasar al calendario?",
         options=list(TIPOS),
         format_func=lambda m: TIPOS[m]["etiqueta"],
-        key=clave,
+        key=clave_widget,
         **inicial,
     )
     # `st.segmented_control` deja deseleccionar pulsando la opción activa; ahí no
-    # hay tipo nuevo que aplicar y sigue rigiendo el que ya estaba.
-    if elegido:
-        st.session_state.modo = elegido
-    st.caption(TIPOS[st.session_state.modo]["descripcion"])
+    # hay tipo nuevo que aplicar y vuelve a regir la propuesta.
+    modo = elegido or propuesto
+    st.caption(TIPOS[modo]["descripcion"])
+    return modo
 
 
 # --------------------------------------------------------------------------- #
 # Barra lateral
 # --------------------------------------------------------------------------- #
 
-def barra_lateral(modo: str, dibujar_google: bool = True) -> dict:
+def hay_sesiones_con_horario(activas: list[TablaActiva]) -> bool:
+    """¿Pinta algo la duración por omisión? Sólo si hay eventos con hora.
+
+    Se miran las tablas abiertas **y** lo ya guardado: una sesión guardada en
+    un archivo anterior también se exporta con esa duración.
+    """
+    return (any(t.modo == MODO_HORA for t in activas)
+            or any(not ev.todo_el_dia for ev in st.session_state.guardados))
+
+
+def barra_lateral(con_horario: bool, dibujar_google: bool = True) -> dict:
+    """Los ajustes que valen para todas las tablas a la vez.
+
+    La plantilla del título no está aquí: se mudó al paso 2 cuando dejó de haber
+    un solo tipo de evento por sesión. Con una tabla de actividades y otra de
+    videoconferencias abiertas, una plantilla única en la barra no podía servir
+    a las dos, y cada una vive ahora en la pestaña de su tabla.
+    """
     with st.container():
         st.markdown("### ⚙️ Ajustes")
         materia = st.text_input(
@@ -336,13 +396,6 @@ def barra_lateral(modo: str, dibujar_google: bool = True) -> dict:
         etiqueta_rec = st.selectbox("Recordatorio", list(RECORDATORIOS), index=0)
 
         with st.expander("Ajustes avanzados"):
-            plantilla = st.text_input(
-                "Plantilla del título",
-                value=PLANTILLAS[modo],
-                help="Campos disponibles: {materia}, {unidad}, {titulo}. "
-                     "Los campos vacíos se omiten junto con su separador.",
-                key=f"plantilla_{modo}",
-            )
             orden = st.radio(
                 "Cuando la fecha sea ambigua (03/04/2026), léela como:",
                 ["Día/Mes/Año — México", "Mes/Día/Año — EUA"],
@@ -355,7 +408,7 @@ def barra_lateral(modo: str, dibujar_google: bool = True) -> dict:
             duracion = st.number_input(
                 "Duración de una sesión sin hora de fin (horas)",
                 min_value=0.5, max_value=12.0, value=2.0, step=0.5,
-                disabled=modo == MODO_DIA,
+                disabled=not con_horario,
             )
             rellenar = st.checkbox(
                 "Rellenar hacia abajo las celdas combinadas de «Unidad»",
@@ -371,7 +424,6 @@ def barra_lateral(modo: str, dibujar_google: bool = True) -> dict:
         "materia": materia,
         "zona": zona,
         "recordatorio": RECORDATORIOS[etiqueta_rec],
-        "plantilla": plantilla,
         "dayfirst": orden.startswith("Día"),
         "anio_defecto": int(anio_defecto),
         "duracion": float(duracion),
@@ -501,10 +553,12 @@ def panel_google(actuales: list[Evento] | None = None) -> None:
             # viaja igual junto al `state`: si la emergente no logra cerrarse, o
             # si se usó el enlace de respaldo, esa ventana acaba siendo la app y
             # tiene que poder devolvérselo.
+            # `actuales` es la unión de las tablas abiertas: lo que hay en los
+            # editores del paso 3 se guarda junto con lo que ya estaba, para que
+            # el viaje a Google no se coma ninguna de las dos cosas.
             url, state = gcal.url_autorizacion(cfg, datos_sesion={
                 "guardados": st.session_state.guardados + list(actuales or []),
                 "materia": st.session_state.get("materia", ""),
-                "modo": st.session_state.get("modo"),
             })
         except gcal.ErrorGoogle as e:
             st.error(str(e))
@@ -597,12 +651,13 @@ def procesar_regreso_oauth(cfg: dict) -> None:
         gcal.depositar_credenciales(estado, credenciales, st.session_state.correo_google)
     st.session_state.cerrar_si_es_emergente = True
 
-    # Devolverle al usuario lo que tenía antes de salir a Google.
+    # Devolverle al usuario lo que tenía antes de salir a Google. El tipo de
+    # cada tabla no viaja: sin archivo no hay tabla que tipar, y en cuanto suba
+    # uno el paso 1 vuelve a proponerlo mirando lo que traiga.
     if datos:
         st.session_state.guardados = datos.get("guardados") or []
-        for clave in ("materia", "modo"):
-            if datos.get(clave) is not None and clave not in st.session_state:
-                st.session_state[clave] = datos[clave]
+        if datos.get("materia") is not None and "materia" not in st.session_state:
+            st.session_state.materia = datos["materia"]
         if st.session_state.guardados:
             st.session_state.aviso_restaurado = len(st.session_state.guardados)
 
@@ -701,28 +756,23 @@ def olvidar_archivo() -> None:
     st.session_state.ronda_subida += 1
 
 
-def paso_archivo(modo: str) -> tuple[bytes, str] | None:
-    # El subtítulo no depende del tipo elegido a propósito: el PDF del plan
-    # trae las dos tablas dentro, así que no hay que pedirle al usuario que
-    # decida antes de subir nada.
+def paso_archivo() -> tuple[bytes, str] | None:
+    # El subtítulo no depende de ningún tipo a propósito: el PDF del plan trae
+    # las dos tablas dentro, así que no hay que pedirle al usuario que decida
+    # antes de subir nada.
     paso(1, "Sube tu archivo", "tu plan de trabajo en PDF, o la tabla en CSV o Excel")
 
-    guardados = st.session_state.pop("aviso_guardado", 0)
-    if guardados:
-        # Con un PDF no hay nada que subir: la otra tabla ya venía dentro y la
-        # app saltó sola a ella.
-        if st.session_state.pop("aviso_salto_pdf", False):
-            st.success(
-                f"Guardé {guardados} eventos y salté a la otra tabla del PDF; "
-                "al final se exportan todos juntos.",
-                icon="✅",
-            )
-        else:
-            st.success(
-                f"Guardé {guardados} eventos. Ahora sube **{TIPOS[modo]['ayuda_archivo']}**; "
-                "al final se exportan todos juntos.",
-                icon="✅",
-            )
+    # Sin archivo y con eventos en el bolsillo sólo se llega por «Añadir otro
+    # archivo» o al volver de Google, y en los dos casos lo que hace falta saber
+    # es que lo anterior no se perdió. Sale de `guardados`, sin ninguna clave de
+    # aviso: el propio estado lo dice todo.
+    if st.session_state.archivo is None and st.session_state.guardados:
+        st.success(
+            f"Llevas **{len(st.session_state.guardados)} eventos** guardados. Sube "
+            "otra tabla —de actividades o de videoconferencias— y al final se "
+            "exportan todos juntos.",
+            icon="✅",
+        )
 
     subido = st.file_uploader(
         "Arrastra aquí el PDF, el CSV o el Excel",
@@ -751,20 +801,51 @@ def paso_archivo(modo: str) -> tuple[bytes, str] | None:
     if subido is None:
         izq, der = st.columns([3, 2])
         izq.caption(f"📄 Trabajando con **{archivo[1]}**")
-        if der.button("Quitar archivo", width="stretch"):
+        # El «Añadir otro archivo» de más abajo vacía el mismo recuadro pero
+        # conservando los eventos, así que aquí hay que decir en qué se
+        # diferencian o se pulsa el que no era.
+        if der.button(
+            "Quitar archivo",
+            width="stretch",
+            help="Descarta este archivo y los eventos de su tabla. Para subir "
+                 "otro **sin perderlos**, usa «➕ Añadir otro archivo».",
+        ):
             olvidar_archivo()
             st.rerun()
     return archivo
+
+
+def boton_otro_archivo(actuales: list[Evento]) -> None:
+    """Cierra el paso 1 ofreciendo cargar otro archivo sin perder lo hecho.
+
+    Es el caso de quien trae las actividades y las videoconferencias en archivos
+    distintos: dentro de un PDF las dos tablas se marcan a la vez, pero con CSV
+    hay que subirlas una por una. Mueve lo que hay en los editores a `guardados`
+    y libera el `file_uploader`; el archivo nuevo propondrá su propio tipo.
+
+    Se dibuja al final del ciclo aunque su hueco esté arriba: cuántos eventos hay
+    no se sabe hasta el paso 3.
+    """
+    if not actuales:
+        return
+    total = len(st.session_state.guardados) + len(actuales)
+    if st.button(
+        f"➕ Añadir otro archivo (conservo los {total} eventos que llevas)",
+        type="tertiary",
+        help="Guarda lo que llevas y vacía el recuadro de arriba para que subas "
+             "la otra tabla. Al final se exportan todas juntas.",
+    ):
+        st.session_state.guardados = st.session_state.guardados + actuales
+        # Vaciar el widget es imprescindible: si no, vuelve a cargar el mismo
+        # archivo y sus eventos se sumarían dos veces.
+        olvidar_archivo()
+        st.rerun()
 
 
 @st.cache_data(show_spinner=False, max_entries=4)
 def _tablas_del_pdf(datos: bytes, anio: int) -> list[planpdf.Candidata]:
     """Buscar las tablas tarda ~1 s y Streamlit reejecuta la página a cada clic."""
     return planpdf.extraer(datos, anio_defecto=anio)
-
-
-def clave_radio_pdf() -> str:
-    return f"radio_pdf_{st.session_state.firma_archivo}"
 
 
 def sugerir_materia(nombre: str) -> None:
@@ -788,49 +869,33 @@ def sugerir_materia(nombre: str) -> None:
     )
 
 
-def archivo_pdf_actual() -> bytes | None:
-    """Los bytes del archivo abierto, si es un PDF que sabemos leer."""
-    archivo = st.session_state.archivo
-    if not archivo or not planpdf.es_pdf(archivo[1]) or not planpdf.DISPONIBLE:
-        return None
-    return archivo[0]
+def _preseleccion(candidatas: list[planpdf.Candidata]) -> list[bool]:
+    """Qué tablas del PDF vienen marcadas de entrada.
 
-
-def otra_tabla_del_pdf(otro_modo: str) -> int | None:
-    """Índice de otra tabla del PDF que sirva para el otro tipo de importación.
-
-    Con un PDF no hace falta volver a subir nada para traerse las
-    videoconferencias: ya están en el mismo archivo. Eso sí, hay que **cambiar
-    de tabla**; si se dejara la misma seleccionada, sus eventos se sumarían dos
-    veces al exportar.
+    Las actividades siempre: son a lo que viene todo el mundo. Las
+    videoconferencias sólo si hay **una**; cuando el plan trae una tabla por
+    grupo, marcar cualquiera sería meterle al alumno las sesiones del asesor
+    equivocado, así que se le deja elegir la suya.
     """
-    datos = archivo_pdf_actual()
-    if datos is None:
-        return None
-    try:
-        candidatas = _tablas_del_pdf(datos, ANIO_ACTUAL)
-    except planpdf.ErrorDePDF:
-        return None
-    actual = st.session_state.tabla_pdf
-    return next((i for i, c in enumerate(candidatas)
-                 if i != actual and c.modo == otro_modo), None)
+    videos = sum(1 for c in candidatas if c.tipo == planpdf.TIPO_VIDEOCONFERENCIAS)
+    return [c.tipo == planpdf.TIPO_ACTIVIDADES or videos == 1 for c in candidatas]
 
 
-def paso_lectura_pdf(datos: bytes) -> tablas.Lectura | None:
-    """Enseña las tablas que trae el PDF y devuelve la que eligió el usuario."""
+def paso_lectura_pdf(datos: bytes, nombre_archivo: str) -> list[TablaActiva]:
+    """Enseña las tablas que trae el PDF y devuelve las que marcó el usuario."""
     if not planpdf.DISPONIBLE:
         st.error(
             "Falta la librería para leer PDF en este entorno. Instálala con "
             "`pip install pdfplumber`, o copia la tabla a Excel y sube ese archivo."
         )
-        return None
+        return []
 
     try:
         with st.spinner("Buscando las tablas del PDF…"):
             candidatas = _tablas_del_pdf(datos, ANIO_ACTUAL)
     except planpdf.ErrorDePDF as e:
         st.error(str(e))
-        return None
+        return []
 
     if not candidatas:
         st.error(
@@ -839,53 +904,68 @@ def paso_lectura_pdf(datos: bytes) -> tablas.Lectura | None:
             "ese archivo.",
             icon="⚠️",
         )
-        return None
+        return []
 
-    # Un salto de tabla pedido desde el paso 4 se aplica aquí, antes de crear el
-    # widget: Streamlit prohíbe tocar la clave de un `st.radio` ya instanciado.
-    pendiente = st.session_state.pop("tabla_pdf_pendiente", None)
-    if pendiente is not None:
-        st.session_state.tabla_pdf = pendiente
-        st.session_state[clave_radio_pdf()] = pendiente
-
-    indice = min(st.session_state.tabla_pdf, len(candidatas) - 1)
-    if len(candidatas) > 1:
-        # `index` sólo la primera vez: si el valor ya está en la sesión (porque
-        # el paso 4 saltó a la otra tabla), pasar ambos hace que Streamlit avise
-        # de que se está fijando por dos vías.
-        clave = clave_radio_pdf()
-        inicial = {} if clave in st.session_state else {"index": indice}
-        indice = st.radio(
-            "¿Qué quieres pasar al calendario?",
-            range(len(candidatas)),
-            format_func=lambda i: candidatas[i].etiqueta(),
-            key=clave,
-            **inicial,
-        )
-        st.caption(
-            f"Encontré {len(candidatas)} tablas dentro de tu PDF. Puedes traerte "
-            "las demás después: en el paso 4, «Incluir también…» te deja volver "
-            "aquí y elegir otra."
-        )
-    st.session_state.tabla_pdf = indice
-    elegida = candidatas[indice]
-
-    # Elegir tabla **es** elegir el tipo de importación: una de videoconferencias
-    # trae horario y una de actividades no, así que no hay nada más que
-    # preguntar. Se asigna en cada ciclo porque `modo` no es la clave de ningún
-    # widget: nadie más la va a mover mientras este PDF esté abierto.
-    st.session_state.modo = elegida.modo
-
-    sugerir_materia(elegida.materia)
-
-    for aviso in elegida.avisos:
-        st.warning(aviso, icon="⚠️")
-    st.success(
-        f"Leí **{len(elegida.df)} filas** de «{elegida.nombre}» "
-        f"({_rango(elegida.paginas)} del PDF).",
-        icon="✅",
+    # Una casilla por tabla y no un `st.radio`: el plan trae las actividades y
+    # las videoconferencias en tablas distintas y casi siempre se quieren las
+    # dos. Se dibuja aunque sólo haya una candidata, porque marcarla y
+    # desmarcarla es también la forma de decir «ésta no es».
+    st.markdown("**¿Qué quieres pasar al calendario?** Marca una o varias.")
+    marcadas: list[int] = []
+    for i, (candidata, marcada) in enumerate(zip(candidatas, _preseleccion(candidatas))):
+        # La clave lleva la firma del archivo: al cambiar de PDF, Streamlit poda
+        # las de antes y la preselección se vuelve a calcular con las nuevas.
+        clave = f"tabla_pdf_{st.session_state.firma_archivo}_{i}"
+        # `value` sólo la primera vez, o Streamlit avisa de que el valor se está
+        # fijando por dos vías.
+        inicial = {} if clave in st.session_state else {"value": marcada}
+        if st.checkbox(candidata.etiqueta(), key=clave, **inicial):
+            marcadas.append(i)
+    st.caption(
+        "Se exportan juntas al final. Si alguna quedó del tipo equivocado, "
+        "puedes corregirlo en el paso 2."
     )
-    return tablas.Lectura(df=elegida.df, hoja=elegida.nombre, fila_encabezado=0)
+
+    # La materia es dato del documento, no de la tabla: da igual cuál se marque.
+    sugerir_materia(candidatas[0].materia)
+
+    if not marcadas:
+        st.warning("Marca al menos una tabla para seguir.", icon="⚠️")
+        return []
+
+    for i in marcadas:
+        for aviso in candidatas[i].avisos:
+            st.warning(f"{candidatas[i].nombre}: {aviso}", icon="⚠️")
+
+    if len(marcadas) == 1:
+        elegida = candidatas[marcadas[0]]
+        st.success(
+            f"Leí **{len(elegida.df)} filas** de «{elegida.nombre}» "
+            f"({_rango(elegida.paginas)} del PDF).",
+            icon="✅",
+        )
+    else:
+        detalle = " + ".join(
+            f"{len(candidatas[i].df)} de «{candidatas[i].nombre}»" for i in marcadas
+        )
+        total = sum(len(candidatas[i].df) for i in marcadas)
+        st.success(f"Leí **{total} filas** en total: {detalle}.", icon="✅")
+
+    activas = []
+    for i in marcadas:
+        candidata = candidatas[i]
+        clave = firma(st.session_state.firma_archivo, "pdf", i)
+        activas.append(TablaActiva(
+            df=candidata.df,
+            # `Candidata.modo` es la propuesta; manda lo que el usuario haya
+            # dicho en el corrector del paso 2.
+            modo=modo_de(clave, candidata.modo),
+            nombre=candidata.nombre,
+            origen=f"{nombre_archivo} · {candidata.nombre}",
+            clave=clave,
+            tipo_propuesto=candidata.modo,
+        ))
+    return activas
 
 
 def _rango(paginas: list[int]) -> str:
@@ -894,16 +974,19 @@ def _rango(paginas: list[int]) -> str:
     return f"páginas {min(paginas)} a {max(paginas)}"
 
 
-def paso_lectura(datos: bytes, nombre: str) -> tablas.Lectura | None:
+def paso_lectura(datos: bytes, nombre: str) -> list[TablaActiva]:
+    """Lee el archivo y devuelve las tablas con las que se va a trabajar.
+
+    Un CSV o un Excel dan exactamente una; un PDF, tantas como marque el usuario.
+    """
     nueva_firma = firma(nombre, len(datos))
     if nueva_firma != st.session_state.firma_archivo:
         st.session_state.firma_archivo = nueva_firma
         st.session_state.hoja = None
         st.session_state.fila_encabezado = None
-        st.session_state.tabla_pdf = 0
 
     if planpdf.es_pdf(nombre):
-        return paso_lectura_pdf(datos)
+        return paso_lectura_pdf(datos, nombre)
 
     hojas: list[str] = []
     if tablas.es_excel(nombre):
@@ -911,7 +994,7 @@ def paso_lectura(datos: bytes, nombre: str) -> tablas.Lectura | None:
             hojas = tablas.listar_hojas(datos, nombre)
         except tablas.ErrorDeLectura as e:
             st.error(str(e))
-            return None
+            return []
 
     if hojas:
         cols = st.columns([2, 3])
@@ -930,7 +1013,7 @@ def paso_lectura(datos: bytes, nombre: str) -> tablas.Lectura | None:
         )
     except tablas.ErrorDeLectura as e:
         st.error(str(e))
-        return None
+        return []
 
     st.success(
         f"Tabla leída: **{len(lectura.df)} filas** y **{len(lectura.df.columns)} columnas**"
@@ -940,21 +1023,126 @@ def paso_lectura(datos: bytes, nombre: str) -> tablas.Lectura | None:
     # La pregunta va aquí, con la tabla ya leída, porque es lo que permite
     # proponer la respuesta; y después del selector de hoja, porque cada hoja del
     # Excel puede ser de un tipo distinto.
-    selector_de_tipo_de_tabla(lectura.df)
-    return lectura
+    clave = firma(st.session_state.firma_archivo, lectura.hoja)
+    modo = selector_de_tipo_de_tabla(lectura.df, clave)
+    return [TablaActiva(
+        df=lectura.df,
+        modo=modo,
+        nombre=lectura.hoja or nombre,
+        origen=nombre + (f" · {lectura.hoja}" if lectura.hoja else ""),
+        clave=clave,
+        fila_encabezado=lectura.fila_encabezado,
+    )]
 
 
 # --------------------------------------------------------------------------- #
 # Paso 2 · Mapeo (sólo los campos del tipo elegido)
 # --------------------------------------------------------------------------- #
 
-def paso_mapeo(lectura: tablas.Lectura, modo: str, dayfirst: bool,
-               ajustar_encabezado: bool = True) -> dict:
-    df = lectura.df
-    principales, opcionales = deteccion.campos_de(modo)
+# Una pestaña con el nombre entero del asesor dentro empuja a las demás fuera de
+# la pantalla; lo que de verdad distingue una tabla de otra va antes.
+_LARGO_PESTANIA = 40
+
+
+def _recortar(texto: str, largo: int = _LARGO_PESTANIA) -> str:
+    if len(texto) <= largo:
+        return texto
+    return texto[:largo].rsplit(" ", 1)[0].rstrip(" ·") + "…"
+
+
+def etiquetas_de_pestania(activas: list[TablaActiva]) -> list[str]:
+    """Nombres para las pestañas: cortos y sin repetidos.
+
+    Dos tablas del PDF pueden llamarse igual (dos de videoconferencias sin
+    grupo ni asesor), y recortar puede hacer iguales dos que no lo eran, así
+    que la desambiguación va después del recorte.
+    """
+    salida, vistos = [], {}
+    for tabla in activas:
+        base = _recortar(tabla.etiqueta)
+        vistos[base] = vistos.get(base, 0) + 1
+        salida.append(base if vistos[base] == 1 else f"{base} ({vistos[base]})")
+    return salida
+
+
+def corrector_de_tipo(tabla: TablaActiva) -> None:
+    """Segunda oportunidad para el tipo de una tabla del PDF.
+
+    En el PDF el tipo lo dice la propia tabla y no se pregunta en el paso 1, así
+    que si `pdf.py` la clasificó mal —o si el plan trae una tabla rara— éste es
+    el único sitio donde el usuario puede desmentirlo. Va fuera del desplegable
+    de abajo: quien lo necesita es porque toda la pantalla le está hablando del
+    tipo equivocado, y esconderlo sería dejarlo sin salida.
+
+    No hace falta aplicar el cambio a mano: tocar el widget reejecuta la página,
+    y el paso 1 vuelve a construir la tabla leyendo esta misma clave (`modo_de`).
+    """
+    clave = f"tipo_{tabla.clave}"
+    inicial = ({} if clave in st.session_state
+               else {"index": list(TIPOS).index(tabla.tipo_propuesto)})
+    st.radio(
+        "Tipo de esta tabla",
+        list(TIPOS),
+        format_func=lambda m: TIPOS[m]["etiqueta"],
+        horizontal=True,
+        key=clave,
+        help="Lo saqué de la propia tabla del PDF. Cámbialo si me equivoqué.",
+        **inicial,
+    )
+
+
+def campo_plantilla(modo: str) -> None:
+    st.text_input(
+        "Plantilla del título",
+        value=PLANTILLAS[modo],
+        help="Campos disponibles: {materia}, {unidad}, {titulo}. "
+             "Los campos vacíos se omiten junto con su separador.",
+        key=f"plantilla_{modo}",
+    )
+
+
+def paso_mapeo(activas: list[TablaActiva], dayfirst: bool) -> list[dict]:
+    """Configuración manual de cada tabla; devuelve un mapeo por tabla."""
     paso(2, "Configuración manual", "opcional — sólo si algo salió mal")
 
-    clave = firma(st.session_state.firma_archivo, st.session_state.hoja, modo, len(df.columns))
+    # La plantilla es una por tipo, no una por tabla, así que con dos tablas del
+    # mismo tipo sólo la dibuja la primera: dos widgets con la misma clave
+    # (`plantilla_<modo>`) serían un error de Streamlit, y dos plantillas
+    # distintas para el mismo tipo de evento no significarían nada.
+    primera_del_tipo: dict[str, int] = {}
+    for i, tabla in enumerate(activas):
+        primera_del_tipo.setdefault(tabla.modo, i)
+
+    if len(activas) == 1:
+        return [config_de_tabla(activas[0], dayfirst, None)]
+
+    salida = []
+    etiquetas = etiquetas_de_pestania(activas)
+    for i, (tabla, pestania) in enumerate(zip(activas, st.tabs(etiquetas))):
+        with pestania:
+            dueña = primera_del_tipo[tabla.modo]
+            salida.append(config_de_tabla(
+                tabla, dayfirst, None if dueña == i else etiquetas[dueña]))
+    return salida
+
+
+def config_de_tabla(tabla: TablaActiva, dayfirst: bool,
+                    plantilla_en: str | None) -> dict:
+    """Mapeo de columnas de una tabla, y lo demás que se ajusta por tabla.
+
+    `plantilla_en` nombra la pestaña donde vive la plantilla de este tipo, o es
+    None si le toca dibujarla a ésta.
+    """
+    df = tabla.df
+    modo = tabla.modo
+    principales, opcionales = deteccion.campos_de(modo)
+
+    if tabla.tipo_propuesto:
+        corrector_de_tipo(tabla)
+
+    # El modo entra en la clave porque cambia qué campos se piden, y el número
+    # de columnas porque corregir la fila de títulos cambia la tabla entera.
+    clave = firma(tabla.clave, modo, len(df.columns))
     if f"auto_{clave}" not in st.session_state:
         st.session_state[f"auto_{clave}"] = deteccion.detectar_columnas(df, dayfirst, modo)
     automatico = st.session_state[f"auto_{clave}"]
@@ -989,10 +1177,22 @@ def paso_mapeo(lectura: tablas.Lectura, modo: str, dayfirst: bool,
             mapeo[campo] = selector(campo, col)
 
         st.divider()
+        # La plantilla del título vivía en la barra lateral; se mudó aquí al
+        # poder haber dos tipos de evento abiertos a la vez, cada uno con la
+        # suya.
+        if plantilla_en is None:
+            campo_plantilla(modo)
+        else:
+            st.caption(
+                f"El título sale de la plantilla `{plantilla_de(modo)}`, la misma "
+                f"para todas las tablas de este tipo. Se ajusta en «{plantilla_en}»."
+            )
+
+        st.divider()
         # En un PDF no hay «fila de títulos» que ajustar: los títulos los
         # reconstruye `pdf.py` al armar la tabla. Si algo salió torcido, lo que
-        # sirve es elegir otra tabla arriba o corregir en el paso 3.
-        if not ajustar_encabezado:
+        # sirve es marcar otra tabla en el paso 1 o corregir en el paso 3.
+        if tabla.fila_encabezado is None:
             st.caption("Así quedó la tabla que saqué del PDF:")
             st.dataframe(df.head(4), width="stretch", hide_index=True)
         else:
@@ -1003,17 +1203,26 @@ def paso_mapeo(lectura: tablas.Lectura, modo: str, dayfirst: bool,
             izq, der = st.columns([1, 3])
             nueva = izq.number_input(
                 "Fila de los títulos",
-                min_value=1, max_value=30, value=lectura.fila_encabezado + 1, step=1,
+                min_value=1, max_value=30, value=tabla.fila_encabezado + 1, step=1,
             )
             der.dataframe(df.head(4), width="stretch", hide_index=True)
-            if nueva - 1 != lectura.fila_encabezado:
+            if nueva - 1 != tabla.fila_encabezado:
                 st.session_state.fila_encabezado = int(nueva) - 1
                 st.rerun()
 
-    if modo == MODO_HORA and not mapeo["hora"]:
+    # No basta con que falte la columna de horario: en 12 de los 14 planes de
+    # `testing_files/` la hora viene **dentro** de la de fecha («FECHA Y HORA»,
+    # «20 de agosto de 2025 de 20:00 a 22:00 hrs»), y `parse_fecha` la saca de
+    # ahí sin problema. Sin esta segunda comprobación el aviso saltaba en casi
+    # todos los PDF —ahora que las videoconferencias vienen premarcadas— y
+    # aconsejaba justo lo contrario de lo correcto.
+    if (modo == MODO_HORA and not mapeo["hora"]
+            and not deteccion.hay_horarios(df, mapeo["fecha"])):
+        donde = ("aquí arriba" if tabla.tipo_propuesto
+                 else "en el paso 1")
         st.warning(
-            "Esta tabla no parece traer horarios. Si son entregas, vuelve al paso 1 "
-            "y elige «Actividades y entregas».",
+            "Esta tabla no parece traer horarios. Si son entregas, cambia su tipo "
+            f"a «Actividades y entregas» {donde}.",
             icon="⚠️",
         )
     return mapeo
@@ -1088,26 +1297,42 @@ CONFIG_COLUMNAS = {
 }
 
 
-def paso_revision(df: pd.DataFrame, mapeo: dict, modo: str, ajustes: dict,
-                  origen: str) -> list[Evento]:
-    """Muestra los eventos de la tabla abierta y devuelve los que quedaron."""
-    eventos = construir_eventos(
-        df, mapeo,
-        materia=ajustes["materia"],
-        plantilla=ajustes["plantilla"],
-        dayfirst=ajustes["dayfirst"],
-        anio_defecto=ajustes["anio_defecto"],
-        modo=modo,
-        duracion_horas=ajustes["duracion"],
-        rellenar_unidad=ajustes["rellenar"],
-        origen=origen,
-    )
+def paso_revision(activas: list[TablaActiva], mapeos: list[dict],
+                  ajustes: dict) -> list[Evento]:
+    """Muestra los eventos de cada tabla abierta y devuelve la unión editada."""
+    por_tabla = [
+        construir_eventos(
+            tabla.df, mapeo,
+            materia=ajustes["materia"],
+            plantilla=plantilla_de(tabla.modo),
+            dayfirst=ajustes["dayfirst"],
+            anio_defecto=ajustes["anio_defecto"],
+            modo=tabla.modo,
+            duracion_horas=ajustes["duracion"],
+            rellenar_unidad=ajustes["rellenar"],
+            origen=tabla.origen,
+        )
+        for tabla, mapeo in zip(activas, mapeos)
+    ]
 
-    listos = sum(1 for e in eventos if e.valido)
-    con_problema = len(eventos) - listos
+    listos = sum(1 for eventos in por_tabla for e in eventos if e.valido)
+    con_problema = sum(len(eventos) for eventos in por_tabla) - listos
     paso(3, "Revisa los eventos",
          f"opcional — {listos} listos" + (f", {con_problema} por revisar" if con_problema else ""))
 
+    if len(activas) == 1:
+        return editor_de_tabla(activas[0], por_tabla[0], ajustes)
+
+    salida: list[Evento] = []
+    pestanias = st.tabs(etiquetas_de_pestania(activas))
+    for tabla, eventos, pestania in zip(activas, por_tabla, pestanias):
+        with pestania:
+            salida.extend(editor_de_tabla(tabla, eventos, ajustes))
+    return salida
+
+
+def editor_de_tabla(tabla: TablaActiva, eventos: list[Evento],
+                    ajustes: dict) -> list[Evento]:
     if not eventos:
         st.warning(
             "No encontré filas con datos. Abre «Configuración manual» arriba y revisa "
@@ -1116,6 +1341,13 @@ def paso_revision(df: pd.DataFrame, mapeo: dict, modo: str, ajustes: dict,
         )
         return []
 
+    listos = sum(1 for e in eventos if e.valido)
+    con_problema = len(eventos) - listos
+    st.caption(
+        f"{tabla.etiqueta} · {len(tabla.df)} filas leídas, {listos} eventos listos"
+        + (f", {con_problema} por revisar" if con_problema else "")
+    )
+
     if con_problema:
         st.warning(
             f"{con_problema} fila(s) sin fecha que yo entienda; están desmarcadas y no "
@@ -1123,22 +1355,33 @@ def paso_revision(df: pd.DataFrame, mapeo: dict, modo: str, ajustes: dict,
             icon="⚠️",
         )
 
+    # La clave lleva todo lo que cambia el contenido del editor: si no, Streamlit
+    # conserva las ediciones de la tabla anterior y las aplica a filas que ya no
+    # son las mismas.
+    clave = firma(tabla.clave, tabla.modo, len(eventos),
+                  plantilla_de(tabla.modo), ajustes["materia"])
     editado = st.data_editor(
-        _a_dataframe(eventos, modo),
+        _a_dataframe(eventos, tabla.modo),
         width="stretch",
         hide_index=True,
         num_rows="dynamic",
-        key=f"editor_{firma(origen, modo, len(eventos), ajustes['plantilla'], ajustes['materia'])}",
-        column_config={c: CONFIG_COLUMNAS[c]() for c in columnas_editor(modo)},
+        key=f"editor_{clave}",
+        column_config={c: CONFIG_COLUMNAS[c]() for c in columnas_editor(tabla.modo)},
     )
-    return _desde_dataframe(editado, origen)
+    return _desde_dataframe(editado, tabla.origen)
 
 
 # --------------------------------------------------------------------------- #
 # Paso 4 · Exportar
 # --------------------------------------------------------------------------- #
 
-def paso_exportar(ajustes: dict, actuales: list[Evento], modo: str) -> None:
+def paso_exportar(ajustes: dict, actuales: list[Evento]) -> None:
+    """Todo junto: lo guardado de archivos anteriores y las tablas abiertas.
+
+    `actuales` ya viene siendo la unión de todas las tablas activas, así que
+    aquí no queda ninguna decisión de qué incluir: lo que se ve en el paso 3 se
+    exporta.
+    """
     eventos: list[Evento] = st.session_state.guardados + actuales
     dia = sum(1 for e in eventos if e.todo_el_dia)
     hora = len(eventos) - dia
@@ -1159,35 +1402,7 @@ def paso_exportar(ajustes: dict, actuales: list[Evento], modo: str) -> None:
             "cargado antes."
         )
 
-    otro = MODO_HORA if modo == MODO_DIA else MODO_DIA
-    izq, der = st.columns([3, 2])
-    with izq:
-        if actuales and st.button(
-            f"➕ Incluir también {TIPOS[otro]['corta'].lower()}",
-            width="stretch",
-            help="Si tu plan trae esa información en otra tabla. Guarda lo de "
-                 "ahora y te deja listo para subirla.",
-        ):
-            # Se conserva lo hecho, se cambia solo el tipo y se vacía el widget:
-            # si no se vacía, vuelve a cargar el mismo archivo y los eventos se
-            # duplican en cada pulsación. El tipo se puede escribir aquí mismo
-            # —aunque los widgets de este ciclo ya estén creados— porque `modo`
-            # no es la clave de ninguno; sólo sirve para redactar el mensaje de
-            # «ahora sube la otra tabla», que es lo que se ve en el ciclo
-            # siguiente.
-            siguiente = otra_tabla_del_pdf(otro)
-            st.session_state.guardados = st.session_state.guardados + actuales
-            st.session_state.aviso_guardado = len(actuales)
-            st.session_state.modo = otro
-            if siguiente is None:
-                olvidar_archivo()
-            else:
-                # El PDF ya trae la otra tabla dentro: basta con saltar a ella,
-                # y el salto se deja pendiente porque el `st.radio` que lo
-                # sostiene ya se creó en este mismo ciclo.
-                st.session_state.tabla_pdf_pendiente = siguiente
-                st.session_state.aviso_salto_pdf = True
-            st.rerun()
+    _, der = st.columns([3, 2])
     with der:
         if st.button("🗑️ Quitar todos los eventos", width="stretch"):
             st.session_state.guardados = []
@@ -1427,11 +1642,6 @@ def main() -> None:
             icon="✅",
         )
 
-    # El tipo de importación ya no se pregunta aquí arriba: se elige dentro del
-    # paso 1, con el archivo ya cargado, que es cuando la app puede proponerlo.
-    # Esto es sólo el valor con el que se llega hasta allí.
-    modo = modo_vigente()
-
     # «Empezar de nuevo» y «Conectar con Google» van arriba de todo en la barra
     # lateral, pero se dibujan al final: el primero necesita saber si hay
     # archivo abierto (lo carga `paso_archivo`, más abajo) y el segundo, qué
@@ -1441,32 +1651,34 @@ def main() -> None:
     contenedor_google = st.sidebar.container()
     contenedor_ajustes = st.sidebar.container()
 
-    actuales: list[Evento] = []
-    archivo = paso_archivo(modo)
+    archivo = paso_archivo()
+    activas: list[TablaActiva] = []
+    hueco_otro_archivo = None
     if archivo is not None:
-        datos, nombre = archivo
-        lectura = paso_lectura(datos, nombre)
-        # El paso 1 es quien fija el tipo —lo elige el usuario en el selector, o
-        # lo fija la tabla del PDF—, así que de aquí en adelante manda lo que
-        # haya dejado en la sesión y no lo que trajéramos de antes.
-        modo = st.session_state.modo
-        if lectura is not None:
-            with contenedor_ajustes:
-                ajustes = barra_lateral(modo, dibujar_google=False)
-            mapeo = paso_mapeo(lectura, modo, ajustes["dayfirst"],
-                               ajustar_encabezado=not planpdf.es_pdf(nombre))
-            origen = nombre + (f" · {lectura.hoja}" if lectura.hoja else "")
-            actuales = paso_revision(lectura.df, mapeo, modo, ajustes, origen)
-        else:
-            with contenedor_ajustes:
-                ajustes = barra_lateral(modo, dibujar_google=False)
+        activas = paso_lectura(*archivo)
+        # «Añadir otro archivo» cierra el paso 1, pero no puede dibujarse aún:
+        # cuántos eventos hay no se sabe hasta el paso 3. Se le reserva el hueco
+        # y se rellena al final del ciclo.
+        hueco_otro_archivo = st.container()
+
+    # La barra lateral va después del paso 1 porque necesita saber si alguna de
+    # las tablas abiertas trae horario; y antes del paso 2, que usa su `dayfirst`.
+    with contenedor_ajustes:
+        ajustes = barra_lateral(hay_sesiones_con_horario(activas), dibujar_google=False)
+
+    actuales: list[Evento] = []
+    if activas:
+        mapeos = paso_mapeo(activas, ajustes["dayfirst"])
+        actuales = paso_revision(activas, mapeos, ajustes)
     else:
-        with contenedor_ajustes:
-            ajustes = barra_lateral(modo, dibujar_google=False)
         paso(2, "Configuración manual", "opcional", activo=False)
         paso(3, "Revisa los eventos", "opcional", activo=False)
 
-    paso_exportar(ajustes, actuales, modo)
+    paso_exportar(ajustes, actuales)
+
+    if hueco_otro_archivo is not None:
+        with hueco_otro_archivo:
+            boton_otro_archivo(actuales)
 
     with contenedor_reinicio:
         boton_empezar_de_nuevo()
@@ -1484,22 +1696,33 @@ No. Todo lo que ves en el paso 3 ya está incluido; ve directo al paso 4 y elige
 cómo mandarlo a tu calendario.
 
 **Tengo las actividades y las videoconferencias en tablas separadas.**
-Sube la primera y, en el paso 4, pulsa **«Incluir también videoconferencias»**
-(o *actividades*, según lo que falte). Se guarda lo que llevas, se cambia solo
-el tipo, y ya sólo tienes que subir la otra tabla. Al final se exportan juntas.
+Si las dos vienen dentro del mismo PDF, márcalas juntas en el paso 1 y listo.
+Si están en archivos distintos, sube el primero y al terminar el paso 1 pulsa
+**«➕ Añadir otro archivo»**: se guarda lo que llevas y puedes subir el otro. Al
+final se exportan juntas.
 
 **Me equivoqué y quiero empezar de cero.**
-En el paso 4, **«Quitar todos los eventos»**. Para cambiar sólo el archivo sin
-perder lo anterior, usa *Quitar archivo* en el paso 1.
+En el paso 4, **«Quitar todos los eventos»**.
+
+**¿En qué se diferencian «Quitar archivo» y «➕ Añadir otro archivo»?**
+Los dos vacían el recuadro del paso 1, pero **«Quitar archivo» descarta** los
+eventos de la tabla que tienes abierta —es el botón para cuando subiste el que
+no era— y **«➕ Añadir otro archivo» los conserva**, que es el que quieres si vas
+a sumar una segunda tabla. Lo que ya estaba guardado de archivos anteriores no
+lo toca ninguno de los dos.
 
 **¿Puedo subir el plan de trabajo en PDF, sin tocarlo?**
-Sí, es lo más rápido. La app busca dentro sus tablas y te enseña las que
-encontró para que elijas. Si prefieres, también acepta la tabla ya pasada a CSV
-o Excel.
+Sí, es lo más rápido. La app busca dentro sus tablas y te las enseña con una
+casilla cada una para que marques las que quieras. Si prefieres, también acepta
+la tabla ya pasada a CSV o Excel.
 
 **Me salen varias tablas de videoconferencias.**
-Tu plan trae un grupo por asesor. Elige la de tu asesor: aparece con su nombre
-al lado del número de grupo.
+Tu plan trae un grupo por asesor, así que no marco ninguna: elige la de tu
+asesor, que aparece con su nombre al lado del número de grupo.
+
+**Marqué una tabla y la trata como si fuera del otro tipo.**
+En el paso 2, arriba de «Configuración manual», cambia el **tipo de esa tabla**.
+Si el archivo es CSV o Excel, el tipo se cambia en el paso 1.
 
 **Subí el PDF y no encontró mis tablas.**
 Puede que tu plan venga con un formato que la app todavía no reconoce, o que el

@@ -12,20 +12,25 @@ eventos de Google Calendar. Aplicación web: **no hay que instalar nada**.
 
 Lo único que decides es qué pasar al calendario — **📝 Actividades y entregas** o
 **🎥 Videoconferencias y asesorías** —, y se pregunta **ya con el archivo
-delante**, con la respuesta puesta. Cada tipo pide sólo sus campos, y los eventos
-se acumulan: puedes hacer las dos tablas y exportarlas juntas.
+delante**, con la respuesta puesta. Cada tipo pide sólo sus campos, y las dos
+cosas pueden ir a la vez: se configuran en pestañas separadas y se exportan
+juntas.
 
 Subes el plan **en PDF, CSV o Excel** y la app:
 
 - **Lee el PDF tal cual te lo dieron**: busca dentro sus tablas, junta las que
   cruzan varias páginas y te enseña las que encontró («📝 Actividades — 14
-  filas, págs. 6–24») para que elijas. Elegir tabla es elegir tipo, así que no
-  hay nada más que contestar. Si el plan trae una tabla de videoconferencias por
-  grupo, te las ofrece todas **con el nombre del asesor**, que es lo que de
-  verdad te dice cuál es la tuya.
+  filas, págs. 6–24») **con una casilla cada una, para que marques las que
+  quieras**: actividades y videoconferencias en un solo viaje. Si el plan trae
+  una tabla de videoconferencias por grupo, te las ofrece todas **con el nombre
+  del asesor**, que es lo que de verdad te dice cuál es la tuya, y no marca
+  ninguna hasta que elijas.
 - **Sabe si tu CSV o tu Excel son entregas o sesiones**: si la tabla trae
   horarios de verdad propone videoconferencias, y si no, actividades. Se corrige
   con un clic.
+- **Junta varios archivos**: si las actividades y las videoconferencias vienen
+  en archivos distintos, «➕ Añadir otro archivo» guarda lo que llevas y te deja
+  subir el siguiente.
 - **Saca sola el nombre de la materia** del propio plan y lo pone en los
   eventos; si no acierta, lo cambias en un campo.
 - **Encuentra sola dónde empieza la tabla**, aunque arriba haya logos, títulos o
@@ -42,7 +47,6 @@ Subes el plan **en PDF, CSV o Excel** y la app:
 - Te deja **revisar y corregir todo** en una tabla editable antes de exportar.
 - **«Empezar de nuevo»** limpia todo para la siguiente materia sin desconectarte
   de Google.
-- Junta varias hojas (actividades + asesorías) en una sola lista.
 
 Y luego, a elegir según lo que tengas a la mano:
 
