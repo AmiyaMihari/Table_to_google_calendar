@@ -9,10 +9,13 @@ se hace desde el navegador, igual en computadora que en celular.
 
 ---
 
-## Antes de empezar: necesitas la tabla en un archivo
+## Antes de empezar: te basta con el plan de trabajo
 
-La app lee **tablas**, no PDF. Tu plan de trabajo casi seguro ya tiene una tabla
-de actividades; sólo hay que sacarla del PDF:
+Sube el **PDF del plan tal como te lo dieron**: la app busca dentro sus tablas
+—las actividades y las videoconferencias— y te enseña las que encontró.
+
+¿Prefieres pasarle la tabla ya suelta, o tu plan trae un formato que no reconoce?
+También acepta **CSV y Excel**:
 
 1. Abre el PDF y **selecciona la tabla completa** (incluyendo la fila de títulos:
    *Unidad*, *Actividad*, *Fecha de entrega*, *Descripción*…).
@@ -29,34 +32,38 @@ de actividades; sólo hay que sacarla del PDF:
 
 ---
 
-## Primero: elige qué vas a importar
-
-Arriba de todo hay dos botones. **Ésta es la decisión más importante**, porque
-cambia todo lo que la app te pide después:
-
-| Botón | Para qué | Cómo quedan en el calendario |
-|---|---|---|
-| 📝 **Actividades y entregas** *(el que viene puesto)* | La tabla de tareas con fecha límite | Eventos de **todo el día** |
-| 🎥 **Videoconferencias y asesorías** | La tabla de sesiones con horario | Eventos **con hora de inicio y fin** |
-
-> 💡 **¿Tienes las dos cosas?** Es lo normal, y está previsto: empieza por las
-> actividades y, cuando llegues al final, pulsa **«➕ Incluir también
-> videoconferencias»**. La app guarda lo que llevas, cambia sola el tipo y sólo
-> te pide la otra tabla. **Al final se exportan todas juntas.**
-
-## Paso 1 · Sube tu archivo
+## Paso 1 · Sube tu archivo y di qué es
 
 Arrastra el archivo al recuadro, o pulsa para buscarlo.
 
-Formatos aceptados: `.xlsx`, `.xlsm`, `.xls`, `.ods`, `.csv`.
+Formatos aceptados: `.pdf`, `.xlsx`, `.xlsm`, `.xls`, `.ods`, `.csv`.
 
-Si es un Excel con varias hojas, aparece un menú para elegir cuál usar.
+En cuanto lo lee, te pregunta **«¿Qué quieres pasar al calendario?»**. Ésta es la
+decisión más importante, porque cambia todo lo que la app te pide después — pero
+no tienes que pensarla: **viene contestada** y casi siempre acierta.
+
+| Opción | Para qué | Cómo quedan en el calendario |
+|---|---|---|
+| 📝 **Actividades y entregas** | La tabla de tareas con fecha límite | Eventos de **todo el día** |
+| 🎥 **Videoconferencias y asesorías** | La tabla de sesiones con horario | Eventos **con hora de inicio y fin** |
+
+- **Si subiste el PDF**, la pregunta son las tablas que encontró dentro
+  («📝 Actividades — 14 filas, págs. 6–24», «🎥 Videoconferencias · grupo 8396 ·
+  *nombre de tu asesora*»). Eliges una y con eso queda dicho todo. Si tu plan
+  trae una tabla de videoconferencias por grupo, elige la de tu asesor.
+- **Si subiste CSV o Excel**, la app mira tu tabla: si trae una columna de
+  horarios propone *Videoconferencias*, y si no, *Actividades*. Si se equivoca,
+  la corriges con un clic. En un Excel con varias hojas, elige primero la hoja
+  —cada una puede ser de un tipo distinto— y la propuesta se recalcula.
 
 Verás un mensaje verde: *«Tabla leída: 12 filas y 4 columnas»*. Si el número de
 filas se ve raro, lo arreglas en el paso 2.
 
-¿Nunca la has usado? Pulsa **📄 Probar con un archivo de ejemplo** para ver cómo
-funciona sin arriesgar nada.
+> 💡 **¿Tienes las dos cosas?** Es lo normal, y está previsto: empieza por las
+> actividades y, cuando llegues al final, pulsa **«➕ Incluir también
+> videoconferencias»**. La app guarda lo que llevas y te lleva a la otra tabla:
+> si subiste el PDF, ya la tiene dentro y salta sola; si no, sólo te pide que
+> subas la otra. **Al final se exportan todas juntas.**
 
 ## Paso 2 · Revisa qué es cada columna
 

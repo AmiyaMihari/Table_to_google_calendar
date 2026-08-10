@@ -132,7 +132,8 @@ def estilos() -> None:
           }
           .aviso-google b { color: #7A2E0E; }
           div[data-testid="stMetricValue"] { font-size: 1.7rem; }
-          /* El selector de tipo manda sobre todo lo demás: que se vea así. */
+          /* El selector de tipo del paso 1 manda sobre todo lo demás: que se
+             vea así. */
           div[data-testid="stSegmentedControl"] button { font-size: 1rem; padding: 10px 22px; }
         </style>
         """,
@@ -185,10 +186,8 @@ def arrancar_estado() -> None:
     st.session_state.setdefault("hoja", None)
     st.session_state.setdefault("fila_encabezado", None)
     st.session_state.setdefault("firma_archivo", "")
-    # Cuál de las tablas del PDF eligió el usuario, y cuál se reflejó ya en el
-    # tipo de importación (para no volver a cambiárselo si lo ajusta a mano).
+    # Cuál de las tablas del PDF eligió el usuario.
     st.session_state.setdefault("tabla_pdf", 0)
-    st.session_state.setdefault("tabla_pdf_aplicada", None)
     # De qué archivo ya sacamos el nombre de la materia (para sugerirlo una vez).
     st.session_state.setdefault("materia_sugerida", None)
 
@@ -251,31 +250,73 @@ def config_google() -> dict | None:
 
 
 # --------------------------------------------------------------------------- #
-# Selector de tipo — la decisión que gobierna todo lo demás
+# El tipo de importación — la decisión que gobierna todo lo demás
 # --------------------------------------------------------------------------- #
 
-def selector_de_tipo() -> str:
-    # Un cambio de tipo pedido desde otro punto de la página (el botón «Incluir
-    # también…») se aplica aquí: Streamlit prohíbe tocar la clave de un widget
-    # una vez creado, así que se deja pendiente y se resuelve al inicio del
-    # siguiente ciclo, justo antes de instanciarlo.
-    pendiente = st.session_state.pop("modo_pendiente", None)
-    if pendiente:
-        st.session_state.modo = pendiente
+def modo_vigente() -> str:
+    """El tipo de importación que rige ahora mismo.
 
-    # `default` sólo la primera vez: si el valor ya viene en la sesión (por
-    # ejemplo restaurado al volver de Google), pasar ambos hace que Streamlit
-    # avise por consola de que se está fijando el valor por dos vías.
-    inicial = {} if "modo" in st.session_state else {"default": MODO_DIA}
-    modo = st.segmented_control(
-        "¿Qué vas a pasar al calendario?",
+    La decisión se toma dentro del paso 1, ya con el archivo delante, que es
+    cuando la app puede proponerla ella sola. Pero hace falta un valor **antes**:
+    la barra lateral se dibuja siempre y necesita saber de qué modo es la
+    plantilla del título. Mientras tanto vale el de la sesión —el que quedó de la
+    tabla anterior, o el que se restauró al volver de Google— y, a falta de él,
+    actividades, que es con lo que empieza casi todo el mundo.
+
+    Ojo con el orden en `main()`: esto escribe `modo`, y `procesar_regreso_oauth`
+    sólo restaura el que traía el usuario si la clave aún no está puesta.
+    """
+    return st.session_state.setdefault("modo", MODO_DIA)
+
+
+def adivinar_tipo(df: pd.DataFrame) -> str:
+    """Qué parece traer esta tabla: entregas o sesiones con horario.
+
+    Se reutiliza la detección de columnas del paso 2 —no hay una segunda
+    heurística que mantener— pidiéndola en modo hora: si de ahí sale una columna
+    de horario **con horas de verdad** en al menos una de cada tres filas
+    (`deteccion.hay_horarios`), la tabla es de videoconferencias. Mirar sólo el
+    nombre no basta, porque «Inicio» también titula columnas de fecha; el puntaje
+    por contenido es justo lo que las separa.
+
+    `dayfirst=True` da igual aquí: sólo decide cómo leer una fecha ambigua, y lo
+    que se mide es si la columna trae horas. El ajuste del usuario vive en la
+    barra lateral, que en este punto del ciclo todavía no se ha dibujado.
+    """
+    mapeo = deteccion.detectar_columnas(df, True, MODO_HORA)
+    return MODO_HORA if deteccion.hay_horarios(df, mapeo["hora"]) else MODO_DIA
+
+
+def selector_de_tipo_de_tabla(df: pd.DataFrame) -> None:
+    """La pregunta del paso 1 para CSV y Excel, ya con una respuesta puesta.
+
+    Con un PDF no se dibuja: allí elegir tabla es elegir tipo (ver
+    `paso_lectura_pdf`) y preguntarlo dos veces sobraba.
+    """
+    # Clave propia por archivo y hoja en vez de `key="modo"`, por dos razones. La
+    # de fondo: Streamlit borra de la sesión la clave de un widget que deja de
+    # dibujarse, y este widget desaparece en cuanto el archivo es un PDF, así que
+    # `modo` —de la que dependen la plantilla, el editor y el viaje a Google— se
+    # perdería a mitad del camino. La otra: una tabla nueva merece una propuesta
+    # nueva, y con la clave atada al archivo la elección de la anterior no se
+    # arrastra.
+    clave = "tipo_" + firma(st.session_state.firma_archivo, st.session_state.hoja)
+    # `default` sólo la primera vez, o Streamlit avisa de que el valor se está
+    # fijando por dos vías. Esa primera vez es justo cuando se adivina: a partir
+    # de ahí manda lo que haya dejado el usuario.
+    inicial = {} if clave in st.session_state else {"default": adivinar_tipo(df)}
+    elegido = st.segmented_control(
+        "¿Qué quieres pasar al calendario?",
         options=list(TIPOS),
         format_func=lambda m: TIPOS[m]["etiqueta"],
-        key="modo",
+        key=clave,
         **inicial,
-    ) or MODO_DIA
-    st.caption(TIPOS[modo]["descripcion"])
-    return modo
+    )
+    # `st.segmented_control` deja deseleccionar pulsando la opción activa; ahí no
+    # hay tipo nuevo que aplicar y sigue rigiendo el que ya estaba.
+    if elegido:
+        st.session_state.modo = elegido
+    st.caption(TIPOS[st.session_state.modo]["descripcion"])
 
 
 # --------------------------------------------------------------------------- #
@@ -805,7 +846,6 @@ def paso_lectura_pdf(datos: bytes) -> tablas.Lectura | None:
     pendiente = st.session_state.pop("tabla_pdf_pendiente", None)
     if pendiente is not None:
         st.session_state.tabla_pdf = pendiente
-        st.session_state.tabla_pdf_aplicada = pendiente
         st.session_state[clave_radio_pdf()] = pendiente
 
     indice = min(st.session_state.tabla_pdf, len(candidatas) - 1)
@@ -816,27 +856,25 @@ def paso_lectura_pdf(datos: bytes) -> tablas.Lectura | None:
         clave = clave_radio_pdf()
         inicial = {} if clave in st.session_state else {"index": indice}
         indice = st.radio(
-            f"Encontré {len(candidatas)} tablas. ¿Cuál quieres pasar al calendario?",
+            "¿Qué quieres pasar al calendario?",
             range(len(candidatas)),
             format_func=lambda i: candidatas[i].etiqueta(),
             key=clave,
             **inicial,
         )
         st.caption(
-            "Puedes traerte las demás después: en el paso 4, «Incluir también…» "
-            "te deja volver aquí y elegir otra."
+            f"Encontré {len(candidatas)} tablas dentro de tu PDF. Puedes traerte "
+            "las demás después: en el paso 4, «Incluir también…» te deja volver "
+            "aquí y elegir otra."
         )
     st.session_state.tabla_pdf = indice
     elegida = candidatas[indice]
 
-    # El tipo de importación gobierna todo lo demás, así que al elegir una tabla
-    # de videoconferencias se cambia solo. Sólo la primera vez por selección: si
-    # después el usuario lo corrige a mano, se respeta.
-    if st.session_state.tabla_pdf_aplicada != indice:
-        st.session_state.tabla_pdf_aplicada = indice
-        if st.session_state.get("modo") != elegida.modo:
-            st.session_state.modo_pendiente = elegida.modo
-            st.rerun()
+    # Elegir tabla **es** elegir el tipo de importación: una de videoconferencias
+    # trae horario y una de actividades no, así que no hay nada más que
+    # preguntar. Se asigna en cada ciclo porque `modo` no es la clave de ningún
+    # widget: nadie más la va a mover mientras este PDF esté abierto.
+    st.session_state.modo = elegida.modo
 
     sugerir_materia(elegida.materia)
 
@@ -863,7 +901,6 @@ def paso_lectura(datos: bytes, nombre: str) -> tablas.Lectura | None:
         st.session_state.hoja = None
         st.session_state.fila_encabezado = None
         st.session_state.tabla_pdf = 0
-        st.session_state.tabla_pdf_aplicada = None
 
     if planpdf.es_pdf(nombre):
         return paso_lectura_pdf(datos)
@@ -900,6 +937,10 @@ def paso_lectura(datos: bytes, nombre: str) -> tablas.Lectura | None:
         + (f" de la hoja «{lectura.hoja}»" if lectura.hoja else ""),
         icon="✅",
     )
+    # La pregunta va aquí, con la tabla ya leída, porque es lo que permite
+    # proponer la respuesta; y después del selector de hoja, porque cada hoja del
+    # Excel puede ser de un tipo distinto.
+    selector_de_tipo_de_tabla(lectura.df)
     return lectura
 
 
@@ -971,8 +1012,8 @@ def paso_mapeo(lectura: tablas.Lectura, modo: str, dayfirst: bool,
 
     if modo == MODO_HORA and not mapeo["hora"]:
         st.warning(
-            "Esta tabla no parece traer horarios. Si son entregas, cambia el tipo "
-            "allá arriba a «Actividades y entregas».",
+            "Esta tabla no parece traer horarios. Si son entregas, vuelve al paso 1 "
+            "y elige «Actividades y entregas».",
             icon="⚠️",
         )
     return mapeo
@@ -1129,11 +1170,15 @@ def paso_exportar(ajustes: dict, actuales: list[Evento], modo: str) -> None:
         ):
             # Se conserva lo hecho, se cambia solo el tipo y se vacía el widget:
             # si no se vacía, vuelve a cargar el mismo archivo y los eventos se
-            # duplican en cada pulsación.
+            # duplican en cada pulsación. El tipo se puede escribir aquí mismo
+            # —aunque los widgets de este ciclo ya estén creados— porque `modo`
+            # no es la clave de ninguno; sólo sirve para redactar el mensaje de
+            # «ahora sube la otra tabla», que es lo que se ve en el ciclo
+            # siguiente.
             siguiente = otra_tabla_del_pdf(otro)
             st.session_state.guardados = st.session_state.guardados + actuales
             st.session_state.aviso_guardado = len(actuales)
-            st.session_state.modo_pendiente = otro
+            st.session_state.modo = otro
             if siguiente is None:
                 olvidar_archivo()
             else:
@@ -1382,7 +1427,10 @@ def main() -> None:
             icon="✅",
         )
 
-    modo = selector_de_tipo()
+    # El tipo de importación ya no se pregunta aquí arriba: se elige dentro del
+    # paso 1, con el archivo ya cargado, que es cuando la app puede proponerlo.
+    # Esto es sólo el valor con el que se llega hasta allí.
+    modo = modo_vigente()
 
     # «Empezar de nuevo» y «Conectar con Google» van arriba de todo en la barra
     # lateral, pero se dibujan al final: el primero necesita saber si hay
@@ -1398,6 +1446,10 @@ def main() -> None:
     if archivo is not None:
         datos, nombre = archivo
         lectura = paso_lectura(datos, nombre)
+        # El paso 1 es quien fija el tipo —lo elige el usuario en el selector, o
+        # lo fija la tabla del PDF—, así que de aquí en adelante manda lo que
+        # haya dejado en la sesión y no lo que trajéramos de antes.
+        modo = st.session_state.modo
         if lectura is not None:
             with contenedor_ajustes:
                 ajustes = barra_lateral(modo, dibujar_google=False)

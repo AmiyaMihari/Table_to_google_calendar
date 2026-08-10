@@ -10,17 +10,22 @@ eventos de Google Calendar. Aplicación web: **no hay que instalar nada**.
 
 ## Qué hace
 
-Eliges arriba qué vas a importar — **📝 Actividades y entregas** o
-**🎥 Videoconferencias y asesorías** — y la app pide sólo los campos de ese tipo.
-Los eventos se acumulan, así que puedes hacer las dos tablas y exportarlas juntas.
+Lo único que decides es qué pasar al calendario — **📝 Actividades y entregas** o
+**🎥 Videoconferencias y asesorías** —, y se pregunta **ya con el archivo
+delante**, con la respuesta puesta. Cada tipo pide sólo sus campos, y los eventos
+se acumulan: puedes hacer las dos tablas y exportarlas juntas.
 
 Subes el plan **en PDF, CSV o Excel** y la app:
 
 - **Lee el PDF tal cual te lo dieron**: busca dentro sus tablas, junta las que
   cruzan varias páginas y te enseña las que encontró («📝 Actividades — 14
-  filas, págs. 6–24») para que elijas. Si el plan trae una tabla de
-  videoconferencias por grupo, te las ofrece todas **con el nombre del asesor**,
-  que es lo que de verdad te dice cuál es la tuya.
+  filas, págs. 6–24») para que elijas. Elegir tabla es elegir tipo, así que no
+  hay nada más que contestar. Si el plan trae una tabla de videoconferencias por
+  grupo, te las ofrece todas **con el nombre del asesor**, que es lo que de
+  verdad te dice cuál es la tuya.
+- **Sabe si tu CSV o tu Excel son entregas o sesiones**: si la tabla trae
+  horarios de verdad propone videoconferencias, y si no, actividades. Se corrige
+  con un clic.
 - **Saca sola el nombre de la materia** del propio plan y lo pone en los
   eventos; si no acierta, lo cambias en un campo.
 - **Encuentra sola dónde empieza la tabla**, aunque arriba haya logos, títulos o
