@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import threading
 import time as _time
 from datetime import timedelta
 from pathlib import Path
@@ -65,6 +66,14 @@ _estados_pendientes: dict[str, tuple[float, str | None, dict | None]] = {}
 # así que la emergente deja aquí lo que consiguió y la pestaña original lo
 # recoge sondeando por su `state`.
 _credenciales_listas: dict[str, tuple[float, object, str]] = {}
+
+# Los dos diccionarios de arriba los tocan varias sesiones a la vez: cada sesión
+# de Streamlit es un hilo del mismo proceso, y con la app publicada hay tantas
+# como usuarios. Sin candado, recorrer uno mientras otro hilo inserta revienta
+# con «dictionary changed size during iteration», y el `min()` de `_purgar`
+# puede quedarse sin la clave que acababa de elegir. Uno solo para los dos: no
+# se toman nunca a la vez y así no hay orden que respetar ni interbloqueo posible.
+_candado = threading.Lock()
 
 
 class ErrorGoogle(Exception):
@@ -210,6 +219,9 @@ def _purgar(registro: dict, ahora: float) -> None:
     Vale para los dos diccionarios de módulo porque ambos guardan el momento en
     la primera posición de la tupla. Sin esto crecerían sin fin: nadie recoge
     los intentos que el usuario abandona a medias.
+
+    **Se llama con `_candado` ya tomado**: recorre el diccionario entero y no
+    puede permitirse que otra sesión lo modifique a media vuelta.
     """
     for viejo in [s for s, datos in registro.items()
                   if ahora - datos[0] > _VIGENCIA_ESTADO]:
@@ -225,8 +237,9 @@ def depositar_credenciales(state: str, credenciales, correo: str = "") -> None:
     la API sólo para saber con qué cuenta se conectó.
     """
     ahora = _time.time()
-    _purgar(_credenciales_listas, ahora)
-    _credenciales_listas[state] = (ahora, credenciales, correo)
+    with _candado:
+        _purgar(_credenciales_listas, ahora)
+        _credenciales_listas[state] = (ahora, credenciales, correo)
 
 
 def recoger_credenciales(state: str):
@@ -234,8 +247,16 @@ def recoger_credenciales(state: str):
 
     Sacarlas es de un solo uso: una vez entregadas no tienen por qué seguir
     vivas en el proceso.
+
+    Se purga también aquí, y no sólo al depositar: lo que deja una emergente que
+    nadie llega a recoger —el usuario cerró la pestaña original— se quedaría en
+    el proceso hasta que otro usuario depositara lo suyo, y en una app poco
+    visitada eso puede ser nunca. Aquí se pasa a menudo, porque la pestaña que
+    espera sondea cada dos segundos.
     """
-    registro = _credenciales_listas.pop(state, None)
+    with _candado:
+        _purgar(_credenciales_listas, _time.time())
+        registro = _credenciales_listas.pop(state, None)
     if registro is None:
         return None
     return registro[1], registro[2]
@@ -252,8 +273,6 @@ def url_autorizacion(cfg: dict, datos_sesion: dict | None = None) -> tuple[str, 
     emergente haya dejado.
     """
     ahora = _time.time()
-    _purgar(_estados_pendientes, ahora)
-
     state = secrets.token_urlsafe(24)
     flujo = _flow(cfg, state=state)
     url, _ = flujo.authorization_url(
@@ -265,14 +284,19 @@ def url_autorizacion(cfg: dict, datos_sesion: dict | None = None) -> tuple[str, 
         # Workspace que bloquea apps sin verificar, Google responde 403 a secas.
         prompt="consent select_account",
     )
-    # `authorization_url` genera el code_verifier; hay que conservarlo.
-    _estados_pendientes[state] = (ahora, getattr(flujo, "code_verifier", None), datos_sesion)
+    # `authorization_url` genera el code_verifier; hay que conservarlo. La purga
+    # va aquí, pegada a la inserción y bajo el mismo candado: armar el flujo no
+    # toca el diccionario y no hay por qué tenerlo tomado mientras tanto.
+    with _candado:
+        _purgar(_estados_pendientes, ahora)
+        _estados_pendientes[state] = (ahora, getattr(flujo, "code_verifier", None), datos_sesion)
     return url, state
 
 
 def credenciales_desde_codigo(cfg: dict, codigo: str, state: str | None = None):
     """Canjea el código por credenciales. Devuelve (credenciales, datos_sesion)."""
-    registro = _estados_pendientes.pop(state, None) if state is not None else None
+    with _candado:
+        registro = _estados_pendientes.pop(state, None) if state is not None else None
     if state is not None and registro is None:
         raise ErrorGoogle(
             "La autorización expiró o no coincide. Vuelve a pulsar "
@@ -445,7 +469,8 @@ def insertar_eventos(
         if progreso:
             progreso(i, len(validos), ev.titulo)
 
-        if evitar_duplicados and _clave(ev.titulo, ev.fecha_inicio.isoformat()) in ya_estan:
+        clave = _clave(ev.titulo, ev.fecha_inicio.isoformat())
+        if evitar_duplicados and clave in ya_estan:
             omitidos += 1
             continue
 
@@ -456,6 +481,12 @@ def insertar_eventos(
                     body=_cuerpo(ev, zona, duracion_horas, recordatorio_min),
                 ).execute()
                 creados += 1
+                # El lote también puede traer repetidos —el mismo archivo
+                # subido dos veces con «Añadir otro archivo» en medio—, y
+                # `ya_estan` se leyó del calendario antes de empezar: sin
+                # apuntar aquí lo que se acaba de crear, el segundo no
+                # encontraría rastro del primero y se insertaría igual.
+                ya_estan.add(clave)
                 break
             except HttpError as e:
                 codigo = getattr(getattr(e, "resp", None), "status", 0)

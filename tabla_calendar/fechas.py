@@ -25,6 +25,8 @@ MESES = {
     "dic": 12, "diciembre": 12,
 }
 
+# Sólo para borrarlos del texto de una fecha («Jueves 3 de septiembre»): aquí no
+# se lee ningún horario que se repita por días de la semana.
 DIAS_SEMANA = (
     "lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo",
 )

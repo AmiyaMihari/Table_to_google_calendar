@@ -53,8 +53,15 @@ _LARGO_NOMBRE = 40
 # entrada más un colchón fijo de instrucciones, y una salida que crece con el
 # número de filas que el lector clásico encontró (cada fila es, a grandes
 # rasgos, un evento más en el JSON de salida).
+#
+# El colchón cubre las instrucciones **y** el esquema, que viajan en cada
+# llamada. Ya no es una regla de tres: son los tokens **medidos** de
+# `ia._INSTRUCCIONES` más los de `ia._ESQUEMA` en JSON, con `o200k_base`, que es
+# el tokenizador de la familia gpt-5. La cifra sube y baja con el prompt —llegó
+# a 1718 mientras el modelo tuvo que aprenderse el horario semanal de las
+# asesorías, que se revirtió— y conviene volver a medirla al tocarlo.
 _CARACTERES_POR_TOKEN = 3.5
-_TOKENS_INSTRUCCIONES = 900
+_TOKENS_INSTRUCCIONES = 1413
 _TOKENS_SALIDA_BASE = 350
 _TOKENS_SALIDA_POR_FILA = 55
 
@@ -246,11 +253,14 @@ def modo_real(pdfs: list[Path], modelo: str | None) -> int:
             print(f"{nombre}: error de la IA — {e}")
             continue
 
+        # El lector clásico aquí sólo sirve para comparar filas, y llega después
+        # de que la llamada a la IA ya se pagó: si falla, se anota y se sigue.
+        # Descartar la medición dejaría fuera del total un costo real.
         try:
             candidatas_clasico = pdf.extraer(datos)
         except pdf.ErrorDePDF as e:
-            print(f"{nombre}: error del lector clásico — {e}")
-            continue
+            print(f"{nombre}: el lector clásico no pudo con este PDF — {e}")
+            candidatas_clasico = []
 
         act_ia, video_ia = _contar_filas_por_tipo(resultado.candidatas)
         act_clasico, video_clasico = _contar_filas_por_tipo(candidatas_clasico)

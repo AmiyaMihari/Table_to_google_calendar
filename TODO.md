@@ -44,6 +44,16 @@ Cómo quedó:
     videoconferencias; a Bases de Datos, Derecho, Discretas y Financieras les
     quita 1–2 actividades). Perder una entrega sin avisar es el peor fallo
     posible aquí: descartado como motor.
+- **El horario de dudas del asesor se ignora — revertido el 15 de agosto de
+  2026.** La tabla «DATOS DEL ASESOR O GRUPO DE ASESORES» (`Días: martes y
+  jueves`, `Hora: 14:00 a 6:00 h.`) llegó a desplegarse en 26 sesiones fechadas,
+  con esquema de patrón y expansión en código. El dueño lo revirtió al recordar
+  qué es esa tabla: **el horario en que el asesor atiende dudas**, no sesiones a
+  las que haya que ir. Ahora el prompt manda ignorarla, junto a los videos
+  grabados y los exámenes. De aquel trabajo se quedan la **regla del año del
+  semestre** («2027-1» = agosto–diciembre de 2026, y todas las tablas de un plan
+  cubren el mismo período) y el aviso de años mezclados. `Calculo_Plan.pdf` con
+  IA es ahora **13 actividades · 4 videoconferencias**.
 - **Pendiente**: revisar a ojo la actividad de más que gpt-5-mini ve en PNL
   (9 vs 8 del clásico) y las 13 de Razonamiento Lógico contra el PDF; y decidir
   tope de gasto por sesión antes de repartir la liga.

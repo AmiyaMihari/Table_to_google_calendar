@@ -1,12 +1,16 @@
 """Exportar Plan de Trabajo a Google Calendar — aplicación Streamlit.
 
-Sube el plan de trabajo (CSV o Excel), revisa lo que se detectó y manda las
-actividades y las videoconferencias a tu Google Calendar de un botón.
+Tres pasos: subir el plan (PDF, CSV o Excel) y marcar qué tablas trae, revisar
+y ajustar los eventos, y exportarlos a Google Calendar.
+
+Todos los textos visibles van en tono impersonal y sin emojis: los lee gente sin
+perfil técnico y la app tiene que sonar a instrucción, no a conversación.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from html import escape
@@ -15,6 +19,7 @@ from pathlib import Path
 # esto, que además no se descuadra si cambia la hora del sistema.
 from time import monotonic, sleep
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
@@ -49,16 +54,20 @@ RECORDATORIOS = {
 }
 
 # Todo lo que cambia entre los dos tipos de importación, en un solo lugar.
+# Sin iconos: los dos tipos se distinguen por el texto, que es lo que hay que
+# leer para elegir bien.
 TIPOS = {
     MODO_DIA: {
-        "icono": "📝",
-        "etiqueta": "📝  Actividades y entregas",
+        "corto": "Actividades",
+        "etiqueta": "Actividades y entregas",
         "descripcion": "Tareas con fecha límite. Se crean como eventos de **todo el día**.",
+        "plantilla": "Título de las actividades",
     },
     MODO_HORA: {
-        "icono": "🎥",
-        "etiqueta": "🎥  Videoconferencias y asesorías",
+        "corto": "Videoconferencias",
+        "etiqueta": "Videoconferencias y asesorías",
         "descripcion": "Sesiones con horario. Se crean como eventos **con hora de inicio y fin**.",
+        "plantilla": "Título de las videoconferencias",
     },
 }
 
@@ -78,12 +87,21 @@ def estilos() -> None:
     st.markdown(
         """
         <style>
+          /* El encabezado es presentación, no contenido: cuanto menos alto
+             ocupe, antes se ve el paso 1. Y el texto va **sin `max-width`**,
+             que era lo que lo partía en una columna angosta en medio de un
+             recuadro ancho y vacío. */
           .bloque-titulo {
             background: linear-gradient(115deg, #4F46E5 0%, #7C3AED 55%, #DB2777 100%);
-            color: #fff; border-radius: 18px; padding: 26px 30px; margin-bottom: 20px;
+            color: #fff; border-radius: 12px; padding: 14px 20px; margin-bottom: 10px;
           }
-          .bloque-titulo h1 { margin: 0; font-size: 2rem; font-weight: 700; letter-spacing: -.5px; }
-          .bloque-titulo p  { margin: 8px 0 0; font-size: 1rem; opacity: .92; max-width: 62ch; }
+          .bloque-titulo h1 {
+            margin: 0; font-size: 1.4rem; font-weight: 700; letter-spacing: -.3px;
+            line-height: 1.25;
+          }
+          .bloque-titulo p {
+            margin: 4px 0 0; font-size: .9rem; opacity: .92; line-height: 1.4;
+          }
           .paso {
             display: flex; align-items: center; gap: 12px;
             margin: 30px 0 12px; padding-bottom: 10px; border-bottom: 2px solid #EEF0F6;
@@ -119,7 +137,7 @@ def estilos() -> None:
              se oculta y se sustituye por la versión en español. */
           div[data-testid="InputInstructions"] { visibility: hidden; position: relative; }
           div[data-testid="InputInstructions"]::after {
-            content: "Pulsa Enter o haz clic fuera para aplicarlo";
+            content: "Enter o clic fuera para aplicarlo";
             visibility: visible; position: absolute; left: 0; top: 0; white-space: nowrap;
           }
           .aviso-google {
@@ -191,6 +209,21 @@ def firma(*partes) -> str:
     return hashlib.md5("|".join(str(p) for p in partes).encode()).hexdigest()[:12]
 
 
+def firma_de_archivo(datos: bytes, nombre: str) -> str:
+    """Identidad del archivo cargado: **su contenido**, no sólo su nombre.
+
+    De ella cuelga todo lo que la sesión recuerda por archivo: las claves de los
+    widgets (por `TablaActiva.clave`), el `ia_fallo_` que impide reintentar una
+    lectura que ya falló y el gasto apuntado en `usos_ia`. Con nombre y tamaño
+    bastaba para distinguir dos archivos distintos, pero no dos versiones del
+    mismo: un plan corregido que conservara el nombre y la longitud heredaba las
+    elecciones del anterior —y su `ia_fallo_`, que le negaba la lectura con IA
+    sin haberla intentado nunca—. Los bytes ya están en memoria y el md5 de un
+    PDF cuesta milisegundos.
+    """
+    return firma(nombre, len(datos), hashlib.md5(datos).hexdigest())
+
+
 # Lo único que sobrevive a «Empezar de nuevo»: volver a pasar por Google cuesta
 # salir de la página, aceptar permisos y volver, y es justo lo que se quiere
 # evitar cuando sólo se va a cargar el plan de otra materia.
@@ -256,6 +289,26 @@ def config_ia() -> dict | None:
     return ia.leer_config(st.secrets) or ia.buscar_clave_local(RAIZ)
 
 
+def config_admin() -> str | None:
+    """La contraseña del panel de administración, si esta instalación tiene una.
+
+    En la nube va en los Secrets (`[admin]` → `clave`); en local, en
+    `env/admin_secret.json`. Sin ninguna de las dos el panel **no se dibuja**:
+    lo que enseña es contabilidad de quien paga la clave de OpenAI, no algo que
+    el estudiante deba encontrarse, y un panel sin llave sería peor que no
+    tenerlo.
+    """
+    try:
+        cfg = st.secrets.get("admin")
+    except Exception:
+        cfg = None
+    if cfg:
+        clave = str(cfg.get("clave", "")).strip()
+        if clave:
+            return clave
+    return ia.buscar_clave_admin(RAIZ)
+
+
 # --------------------------------------------------------------------------- #
 # Las tablas activas — qué se está pasando al calendario ahora mismo
 # --------------------------------------------------------------------------- #
@@ -264,8 +317,8 @@ def config_ia() -> dict | None:
 class TablaActiva:
     """Una tabla en curso: la del CSV o el Excel, o cada tabla marcada del PDF.
 
-    Es la unidad de trabajo de los pasos 2, 3 y 4: cada una trae su tipo, su
-    mapeo de columnas y su editor, y al exportar se suman todas.
+    Es la unidad de trabajo de los pasos 2 y 3: cada una trae su tipo, su mapeo
+    de columnas y su editor, y al exportar se suman todas.
 
     **No vive en `session_state`.** Se reconstruye entera en cada ciclo a partir
     del archivo —el PDF pasa por `_tablas_del_pdf`, que está cacheado—, y en la
@@ -288,34 +341,16 @@ class TablaActiva:
     # Sólo CSV y Excel: en qué fila están los títulos, que el paso 2 deja
     # corregir. En el PDF los reconstruye `pdf.py` y no hay nada que ajustar.
     fila_encabezado: int | None = None
-    # Sólo PDF: el tipo que propuso `Candidata.modo`. Que no sea None es lo que
-    # hace que el paso 2 dibuje el corrector — en CSV y Excel el tipo ya se
-    # preguntó arriba, en el paso 1, y preguntarlo dos veces sobraría.
-    tipo_propuesto: str | None = None
-
-    @property
-    def etiqueta(self) -> str:
-        """Nombre con icono, para la pestaña de los pasos 2 y 3."""
-        return f"{TIPOS[self.modo]['icono']} {self.nombre}"
-
-
-def modo_de(clave: str, propuesto: str) -> str:
-    """El tipo que rige para una tabla: el que corrigió el usuario, o el propuesto.
-
-    La corrección vive en la clave de un widget (`tipo_<clave>`), que Streamlit
-    poda en cuanto ese widget deja de dibujarse: al desmarcar una tabla del PDF
-    o cambiar de archivo, la corrección se va con ella y la siguiente vuelve a
-    partir de la propuesta. Es justo lo que se quiere.
-    """
-    return st.session_state.get(f"tipo_{clave}") or propuesto
 
 
 def plantilla_de(modo: str) -> str:
     """La plantilla del título vigente para un tipo de evento.
 
-    Vive en la clave del `text_input` que dibuja el paso 2 (`plantilla_<modo>`),
-    una por tipo y no una por tabla: dos tablas de videoconferencias son el
-    mismo tipo de evento y titularlas distinto no tendría sentido.
+    Vive en la clave del `text_input` que dibuja «Ajustes avanzados»
+    (`plantilla_<modo>`), una por tipo y no una por tabla: dos tablas de
+    videoconferencias son el mismo tipo de evento y titularlas distinto no
+    tendría sentido. Está en la barra lateral y no en el paso 2 porque es jerga
+    —`{materia} · {unidad} · {titulo}`— y en medio del flujo estorbaba.
     """
     return st.session_state.get(f"plantilla_{modo}") or PLANTILLAS[modo]
 
@@ -341,8 +376,11 @@ def adivinar_tipo(df: pd.DataFrame) -> str:
 def selector_de_tipo_de_tabla(df: pd.DataFrame, clave: str) -> str:
     """La pregunta del paso 1 para CSV y Excel, ya con una respuesta puesta.
 
-    Con un PDF no se dibuja: allí cada tabla trae su tipo escrito
-    (`Candidata.modo`), y quien quiera desmentirlo tiene el corrector del paso 2.
+    Con un PDF no se dibuja: allí el tipo lo trae escrito cada tabla
+    (`Candidata.modo`, obra del lector) y lo anuncia el nombre con el que sale
+    en su casilla — «Actividades — 13 filas…», «Videoconferencias · grupo 8596 ·
+    …». Preguntarlo otra vez al lado de cada casilla obligaba a leer dos veces
+    lo mismo, una a cada lado de la línea.
     """
     # La propuesta se calcula una sola vez por tabla y se guarda: `adivinar_tipo`
     # recorre el DataFrame entero y esto se dibuja en cada ciclo. La clave no es
@@ -361,7 +399,7 @@ def selector_de_tipo_de_tabla(df: pd.DataFrame, clave: str) -> str:
     # fijando por dos vías. A partir de ahí manda lo que haya dejado el usuario.
     inicial = {} if clave_widget in st.session_state else {"default": propuesto}
     elegido = st.segmented_control(
-        "¿Qué quieres pasar al calendario?",
+        "Tipo de tabla",
         options=list(TIPOS),
         format_func=lambda m: TIPOS[m]["etiqueta"],
         key=clave_widget,
@@ -378,6 +416,15 @@ def selector_de_tipo_de_tabla(df: pd.DataFrame, clave: str) -> str:
 # Barra lateral
 # --------------------------------------------------------------------------- #
 
+def campo_plantilla(modo: str) -> None:
+    """Un campo por tipo de evento, dentro de «Ajustes avanzados»."""
+    st.text_input(
+        TIPOS[modo]["plantilla"],
+        value=PLANTILLAS[modo],
+        key=f"plantilla_{modo}",
+    )
+
+
 def hay_sesiones_con_horario(activas: list[TablaActiva]) -> bool:
     """¿Pinta algo la duración por omisión? Sólo si hay eventos con hora.
 
@@ -391,13 +438,13 @@ def hay_sesiones_con_horario(activas: list[TablaActiva]) -> bool:
 def barra_lateral(con_horario: bool, dibujar_google: bool = True) -> dict:
     """Los ajustes que valen para todas las tablas a la vez.
 
-    La plantilla del título no está aquí: se mudó al paso 2 cuando dejó de haber
-    un solo tipo de evento por sesión. Con una tabla de actividades y otra de
-    videoconferencias abiertas, una plantilla única en la barra no podía servir
-    a las dos, y cada una vive ahora en la pestaña de su tabla.
+    Aquí dentro, en «Ajustes avanzados», vive también la plantilla del título:
+    una por tipo de evento (`plantilla_<modo>`). Estuvo en el paso 2 mientras
+    hizo falta una por tabla abierta, pero es jerga —lleva llaves y nombres de
+    campo— y en medio del flujo distraía de lo único que hay que revisar ahí.
     """
     with st.container():
-        st.markdown("### ⚙️ Ajustes")
+        st.markdown("### Ajustes")
         materia = st.text_input(
             "Nombre de la materia",
             help="Se antepone al título de cada evento y da nombre al calendario "
@@ -428,6 +475,17 @@ def barra_lateral(con_horario: bool, dibujar_google: bool = True) -> dict:
                 help="Excel deja huecos debajo de una celda combinada; esto los completa.",
             )
 
+            # Las dos plantillas, siempre visibles: una por tipo de evento, no
+            # una por tabla. Se dibujan aquí aunque el archivo abierto sólo
+            # traiga uno de los dos tipos, para que estén siempre en el mismo
+            # sitio.
+            st.caption(
+                "Título de los eventos. Campos disponibles: `{materia}`, "
+                "`{unidad}`, `{titulo}`; los vacíos se omiten con su separador."
+            )
+            for modo in TIPOS:
+                campo_plantilla(modo)
+
             # El interruptor sólo existe si hay clave configurada: sin ella no
             # hay nada que apagar. `value` sólo la primera vez, o Streamlit
             # avisa de que el valor se fija por dos vías.
@@ -442,10 +500,11 @@ def barra_lateral(con_horario: bool, dibujar_google: bool = True) -> dict:
                          "lector clásico, que no envía el PDF a ningún servicio.",
                     **inicial,
                 )
-                usos = st.session_state.get("usos_ia", {})
-                if usos:
-                    gasto = sum(u.costo_usd or 0.0 for u in usos.values())
-                    st.caption(f"IA en esta sesión: {len(usos)} PDF · ${gasto:.4f} USD")
+                # El gasto de la sesión ya no se enseña aquí: quien sube su plan
+                # no decide nada con esa cifra —la paga quien publica la app— y
+                # ocupaba sitio en el único desplegable que sí toca abrir. Se
+                # sigue apuntando (`usos_ia`, y el registro en disco) y se
+                # consulta en «Administración», al fondo de la barra lateral.
 
         if dibujar_google:
             st.divider()
@@ -463,18 +522,114 @@ def barra_lateral(con_horario: bool, dibujar_google: bool = True) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Administración — el gasto de la IA, para quien paga la clave
+# --------------------------------------------------------------------------- #
+
+# Cuántas filas de desglose caben en la barra lateral sin volverla un listado.
+_FILAS_ADMIN = 6
+
+
+def _linea_gasto(cubo: dict) -> str:
+    """Una lectura del contador: lecturas, tokens y dólares."""
+    lecturas = cubo["llamadas"]
+    return (f"{lecturas} lectura{'' if lecturas == 1 else 's'} · "
+            f"{cubo['entrada']:,} tokens de entrada + {cubo['salida']:,} de salida · "
+            f"${cubo['costo']:.4f} USD")
+
+
+def _desglose(titulo: str, filas: list, limite: int = _FILAS_ADMIN) -> None:
+    """Un bloque compacto de «etiqueta · lecturas · dólares», ya recortado."""
+    if not filas:
+        return
+    st.markdown(f"**{titulo}**")
+    lineas = [f"{etiqueta} · {cubo['llamadas']} · ${cubo['costo']:.4f}"
+              for etiqueta, cubo in filas[:limite]]
+    if len(filas) > limite:
+        lineas.append(f"y {len(filas) - limite} más")
+    # Un solo `caption` con saltos de línea: seis `caption` seguidos separan
+    # tanto que el bloque deja de leerse como una tabla.
+    st.caption("  \n".join(lineas))
+
+
+def resumen_de_gasto() -> None:
+    """Lo que ha costado la lectura con IA: esta sesión y el registro en disco.
+
+    Son dos cuentas distintas a propósito. `usos_ia` es lo que se pagó **en esta
+    sesión** —lo que el dueño está viendo pasar ahora mismo— y el registro es lo
+    acumulado por todas las sesiones del proceso, que es lo que hay que mirar
+    para decidir si la clave sale cara.
+    """
+    usos = st.session_state.get("usos_ia", {})
+    lecturas = [u for lista in usos.values() for u in lista]
+    st.markdown("**Esta sesión**")
+    if lecturas:
+        sesion = {
+            "llamadas": len(lecturas),
+            "entrada": sum(u.entrada for u in lecturas),
+            "salida": sum(u.salida for u in lecturas),
+            "costo": sum(u.costo_usd or 0.0 for u in lecturas),
+        }
+        st.caption(f"{len(usos)} archivo{'' if len(usos) == 1 else 's'} · "
+                   + _linea_gasto(sesion))
+    else:
+        st.caption("Sin lecturas con IA.")
+
+    ruta = ia.ruta_registro(RAIZ)
+    resumen = ia.resumir_registro(ia.leer_registro(ruta))
+    st.markdown("**Acumulado**")
+    if not resumen["total"]["llamadas"]:
+        st.caption(f"El registro (`env/{ia.NOMBRE_REGISTRO}`) está vacío.")
+        return
+    st.caption(_linea_gasto(resumen["total"]))
+    _desglose("Por día", resumen["por_dia"])
+    _desglose("Por archivo", resumen["por_archivo"])
+    st.caption(f"Origen: `env/{ia.NOMBRE_REGISTRO}`")
+
+
+def panel_admin() -> None:
+    """El panel de administración, al fondo de la barra lateral y bajo llave.
+
+    Va detrás de todo lo demás y cerrado: no es parte del flujo de nadie que
+    venga a pasar su plan al calendario. Sin contraseña configurada
+    (`config_admin`) no se dibuja ni el desplegable.
+    """
+    clave = config_admin()
+    if not clave:
+        return
+    with st.expander("Administración"):
+        if not st.session_state.get("admin_abierto"):
+            escrita = st.text_input("Contraseña", type="password", key="admin_clave")
+            if not escrita:
+                return
+            # `compare_digest` y no `==`: comparar cadena a cadena termina en
+            # cuanto encuentra la primera diferencia, y ese tiempo se puede
+            # medir desde fuera para adivinar la contraseña letra a letra. Va
+            # en bytes porque con `str` sólo admite ASCII: una contraseña con
+            # eñe o acento —que en español es lo normal— reventaría la app con
+            # un `TypeError`.
+            if not hmac.compare_digest(escrita.encode("utf-8"), clave.encode("utf-8")):
+                st.caption("Contraseña incorrecta.")
+                return
+            # Se sigue de largo en esta misma ejecución en vez de pedir un
+            # `st.rerun()`: lo que hay que dibujar ya se puede dibujar, y un
+            # ciclo más sólo añadiría un parpadeo.
+            st.session_state.admin_abierto = True
+        resumen_de_gasto()
+
+
+# --------------------------------------------------------------------------- #
 # Google
 # --------------------------------------------------------------------------- #
 
 AYUDA_SIN_CONFIGURAR = (
-    "El botón de envío directo necesita credenciales de Google que configura **una "
-    "sola vez quien publica la app** — no vienen en el código porque son secretas.\n\n"
-    "Si tú administras esta instalación (ver `docs/DESPLIEGUE.md` → **Parte B**):\n\n"
-    "- **En tu computadora:** deja el JSON que descargaste de Google Cloud dentro de "
-    "la carpeta `env/`. La app lo encuentra sola.\n"
-    "- **En Streamlit Cloud:** pega el `client_id` y el `client_secret` en "
+    "El envío directo necesita credenciales de Google que configura **una sola vez "
+    "quien publica la app** — no vienen en el código porque son secretas.\n\n"
+    "Para administrar esta instalación (ver `docs/DESPLIEGUE.md` → **Parte B**):\n\n"
+    "- **En una computadora propia:** dejar el JSON descargado de Google Cloud "
+    "dentro de la carpeta `env/`. La app lo encuentra solo.\n"
+    "- **En Streamlit Cloud:** pegar el `client_id` y el `client_secret` en "
     "*Settings → Secrets*.\n\n"
-    "Mientras tanto, **Descargar archivo .ics** hace exactamente lo mismo."
+    "Entretanto, **Descargar archivo .ics** hace exactamente lo mismo."
 )
 
 # Cuánto se sonda esperando a que la ventana emergente traiga el permiso.
@@ -527,10 +682,10 @@ def boton_empezar_de_nuevo() -> None:
     if st.session_state.archivo is None and not st.session_state.guardados:
         return
     if st.button(
-        "🔄 Empezar de nuevo",
+        "Empezar de nuevo",
         width="stretch",
         help="Borra el archivo, los eventos y el nombre de la materia para "
-             "empezar con otra. No te desconecta de Google.",
+             "empezar con otra. No cierra la sesión de Google.",
     ):
         # Se deja pendiente: en este ciclo los widgets ya están creados y
         # `reiniciar_sesion` borra sus claves.
@@ -541,7 +696,7 @@ def boton_empezar_de_nuevo() -> None:
 
 
 def panel_google(actuales: list[Evento] | None = None) -> None:
-    st.markdown("### 🔗 Google Calendar")
+    st.markdown("### Google Calendar")
 
     if not gcal.DISPONIBLE:
         st.warning("Faltan las librerías de Google en este entorno.")
@@ -549,19 +704,19 @@ def panel_google(actuales: list[Evento] | None = None) -> None:
 
     cfg = config_google()
     if not cfg:
-        st.info("Envío directo no disponible: descarga el `.ics`.", icon="ℹ️")
+        st.info("Envío directo no disponible en esta instalación. Queda el `.ics`.")
         with st.expander("¿Por qué?"):
             st.markdown(AYUDA_SIN_CONFIGURAR)
             actual = url_base()
             if actual:
-                st.caption("Al configurarlo, registra este URI de redirección en Google Cloud:")
+                st.caption("Al configurarlo, registrar este URI de redirección en Google Cloud:")
                 st.code(actual, language=None)
         return
 
     # El regreso de Google ya se procesó al arrancar main().
     if st.session_state.credenciales:
         correo = st.session_state.get("correo_google", "")
-        st.success(f"Conectado{f' como {correo}' if correo else ''}", icon="✅")
+        st.success(f"Conectado{f' como {correo}' if correo else ''}")
         if st.button("Desconectar", width="stretch"):
             for clave in ("credenciales", "correo_google"):
                 st.session_state.pop(clave, None)
@@ -570,9 +725,8 @@ def panel_google(actuales: list[Evento] | None = None) -> None:
         # Mientras dura el sondeo no se genera URL nueva: cada una deja un
         # `state` en el proceso y se llenaría de intentos que nadie va a usar.
         st.info(
-            "Termina de autorizar en la ventana emergente. En cuanto aceptes se "
-            "cierra sola y esta página queda conectada, con tu trabajo intacto.",
-            icon="⏳",
+            "Falta autorizar en la ventana emergente. Al aceptar, se cierra sola "
+            "y esta página queda conectada, con el trabajo intacto."
         )
         if st.button("Cancelar", width="stretch"):
             st.session_state.pop("esperando_oauth", None)
@@ -614,7 +768,7 @@ def panel_google(actuales: list[Evento] | None = None) -> None:
         )
         # El camino de siempre, por si un bloqueador impidió la emergente.
         st.link_button(
-            "¿No se abrió la ventana? Conéctate en otra pestaña",
+            "¿No se abrió la ventana? Conectar en otra pestaña",
             url, type="tertiary", width="stretch",
         )
         aviso_app_sin_verificar()
@@ -629,28 +783,28 @@ def aviso_app_sin_verificar() -> None:
     """
     st.markdown(
         '<div class="aviso-google">'
-        '⚠️ Google te dirá que <b>«no ha verificado esta aplicación»</b>. '
-        'Es normal y puedes continuar:<br><br>'
-        '1. Pulsa <b>Configuración avanzada</b><br>'
-        '2. Luego <b>Ir a Exportar Plan de Trabajo a Google Calendar</b>'
+        'Google avisará de que <b>«no ha verificado esta aplicación»</b>. '
+        'Es normal y se puede continuar:<br><br>'
+        '1. Pulsar <b>Configuración avanzada</b><br>'
+        '2. Después <b>Ir a Exportar Plan de Trabajo a Google Calendar</b>'
         '</div>',
         unsafe_allow_html=True,
     )
-    with st.expander("¿Por qué sale eso? ¿Es seguro?"):
+    with st.expander("¿Por qué sale ese aviso? ¿Es seguro?"):
         st.markdown(
             "Esa pantalla **no significa que la app sea peligrosa**. Google la "
             "muestra en toda aplicación que no haya pasado su proceso de "
             "verificación, un trámite que exige dominio propio y aviso de "
             "privacidad publicado; para un proyecto estudiantil no compensa.\n\n"
-            "Qué puedes comprobar tú:\n\n"
-            "- Tu archivo **no se guarda**: se procesa mientras usas la página.\n"
-            "- El permiso sólo sirve para **crear los eventos que confirmes**.\n"
-            "- Puedes retirárselo cuando quieras en "
-            "[tu cuenta de Google](https://myaccount.google.com/permissions).\n"
+            "Qué se puede comprobar:\n\n"
+            "- El archivo **no se guarda**: se procesa mientras la página está abierta.\n"
+            "- El permiso sólo sirve para **crear los eventos exportados**.\n"
+            "- Se puede retirar en cualquier momento desde "
+            "[la cuenta de Google](https://myaccount.google.com/permissions).\n"
             "- El código es abierto y se puede revisar: "
             "[github.com/AmiyaMihari](https://github.com/AmiyaMihari/Table_to_google_calendar).\n\n"
-            "Si aun así prefieres no dar permisos, descarga el `.ics` en el "
-            "paso 4: hace exactamente lo mismo."
+            "Sin dar ningún permiso queda el `.ics` del paso 3: hace exactamente "
+            "lo mismo."
         )
 
 
@@ -709,8 +863,8 @@ def despedir_ventana_emergente() -> None:
     # Un aviso que se desvanece: cuando la ventana sí se cierra nadie lo llega a
     # leer, y cuando no (el iframe de la nube no siempre puede cerrar su ventana)
     # dice lo único que hace falta saber.
-    st.toast("Conexión lista. Si esta ventana no se cierra sola, ya puedes "
-             "cerrarla y volver a la pestaña donde estabas.", icon="✅")
+    st.toast("Conexión lista. Si esta ventana no se cierra sola, se puede "
+             "cerrar a mano y volver a la pestaña anterior.")
     st.html(
         "<script>try { window.top.close(); } catch (e) {}</script>",
         unsafe_allow_javascript=True,
@@ -737,7 +891,7 @@ def recoger_credenciales_de_la_emergente() -> None:
         # llevaría el script por delante. Se deja pendiente para el final del
         # ciclo, que es donde ya nada puede tragárselo.
         st.session_state.cerrar_emergente_pendiente = True
-        st.toast("Conectado con Google", icon="✅")
+        st.toast("Conectado con Google")
         return
 
 
@@ -791,7 +945,7 @@ def paso_archivo() -> tuple[bytes, str] | None:
     # El subtítulo no depende de ningún tipo a propósito: el PDF del plan trae
     # las dos tablas dentro, así que no hay que pedirle al usuario que decida
     # antes de subir nada.
-    paso(1, "Sube tu archivo", "tu plan de trabajo en PDF, o la tabla en CSV o Excel")
+    paso(1, "Subir el archivo", "el plan de trabajo en PDF, o la tabla en CSV o Excel")
 
     # Sin archivo y con eventos en el bolsillo sólo se llega por «Añadir otro
     # archivo» o al volver de Google, y en los dos casos lo que hace falta saber
@@ -799,14 +953,13 @@ def paso_archivo() -> tuple[bytes, str] | None:
     # aviso: el propio estado lo dice todo.
     if st.session_state.archivo is None and st.session_state.guardados:
         st.success(
-            f"Llevas **{len(st.session_state.guardados)} eventos** guardados. Sube "
-            "otra tabla —de actividades o de videoconferencias— y al final se "
-            "exportan todos juntos.",
-            icon="✅",
+            f"Hay **{len(st.session_state.guardados)} eventos** guardados. Al subir "
+            "otra tabla —de actividades o de videoconferencias— se exportan todos "
+            "juntos al final."
         )
 
     subido = st.file_uploader(
-        "Arrastra aquí el PDF, el CSV o el Excel",
+        "Arrastrar aquí el PDF, el CSV o el Excel",
         type=["pdf", "csv", "xlsx", "xlsm", "xls", "ods", "tsv", "txt"],
         label_visibility="collapsed",
         key=f"subida_{st.session_state.ronda_subida}",
@@ -819,19 +972,19 @@ def paso_archivo() -> tuple[bytes, str] | None:
     archivo = st.session_state.archivo
     if archivo is None:
         nota(
-            "<b>Lo más rápido: sube el PDF del plan de trabajo tal como te lo dieron.</b> "
-            "La app busca dentro sus tablas —las actividades y las videoconferencias— y "
-            "te enseña las que encontró para que elijas cuál pasar al calendario."
+            "<b>Lo más rápido es subir el PDF del plan de trabajo tal como lo "
+            "entregaron.</b> La app busca dentro sus tablas —las actividades y las "
+            "videoconferencias— y muestra las que encontró para elegir cuáles pasar "
+            "al calendario."
             "<br><br>"
-            "¿Ya tienes la tabla por separado, en <b>CSV o Excel</b>? También sirve, y no "
-            "importa si arriba hay filas de título ni si las celdas de «Unidad» están "
-            "combinadas."
+            "La tabla suelta en <b>CSV o Excel</b> también sirve, y no importa si "
+            "arriba hay filas de título ni si las celdas de «Unidad» están combinadas."
         )
         return None
 
     if subido is None:
         izq, der = st.columns([3, 2])
-        izq.caption(f"📄 Trabajando con **{archivo[1]}**")
+        izq.caption(f"Archivo abierto: **{archivo[1]}**")
         # El «Añadir otro archivo» de más abajo vacía el mismo recuadro pero
         # conservando los eventos, así que aquí hay que decir en qué se
         # diferencian o se pulsa el que no era.
@@ -839,7 +992,7 @@ def paso_archivo() -> tuple[bytes, str] | None:
             "Quitar archivo",
             width="stretch",
             help="Descarta este archivo y los eventos de su tabla. Para subir "
-                 "otro **sin perderlos**, usa «➕ Añadir otro archivo».",
+                 "otro **sin perderlos**, usar «Añadir otro archivo».",
         ):
             olvidar_archivo()
             st.rerun()
@@ -855,16 +1008,16 @@ def boton_otro_archivo(actuales: list[Evento]) -> None:
     y libera el `file_uploader`; el archivo nuevo propondrá su propio tipo.
 
     Se dibuja al final del ciclo aunque su hueco esté arriba: cuántos eventos hay
-    no se sabe hasta el paso 3.
+    no se sabe hasta el paso 2.
     """
     if not actuales:
         return
     total = len(st.session_state.guardados) + len(actuales)
     if st.button(
-        f"➕ Añadir otro archivo (conservo los {total} eventos que llevas)",
+        f"Añadir otro archivo (se conservan los {total} eventos actuales)",
         type="tertiary",
-        help="Guarda lo que llevas y vacía el recuadro de arriba para que subas "
-             "la otra tabla. Al final se exportan todas juntas.",
+        help="Guarda los eventos actuales y vacía el recuadro de arriba para "
+             "subir la otra tabla. Al final se exportan todas juntas.",
     ):
         st.session_state.guardados = st.session_state.guardados + actuales
         # Vaciar el widget es imprescindible: si no, vuelve a cargar el mismo
@@ -880,42 +1033,66 @@ def _tablas_del_pdf(datos: bytes, anio: int) -> list[planpdf.Candidata]:
 
 
 @st.cache_data(show_spinner=False, max_entries=4)
-def _tablas_del_pdf_ia(datos: bytes, anio: int, clave: str, modelo: str) -> ia.ResultadoIA:
+def _tablas_del_pdf_ia(datos: bytes, anio: int, clave: str,
+                       modelo: str) -> tuple[ia.ResultadoIA, str]:
     """Una llamada al modelo por archivo, y ni una más: cada una cuesta dinero.
 
     El caché es lo que la garantiza: Streamlit reejecuta la página entera a cada
     clic, y sin él cada marca de una casilla volvería a pagar la extracción.
+
+    Devuelve además una marca de llamada, que es lo único que distingue una
+    respuesta recién pagada de una servida del caché: el cuerpo de esta función
+    corre sólo cuando se falla el caché, así que la marca cambia exactamente
+    cuando se paga. Sin ella no habría forma de contar el gasto —cada
+    reejecución sumaría otra vez lo mismo, o, si se sobreescribe, la segunda
+    llamada de un PDF expulsado del caché no sumaría nunca—.
     """
     texto = planpdf.texto_completo(datos)
-    return ia.extraer(texto, clave_api=clave, modelo=modelo, anio_defecto=anio)
+    resultado = ia.extraer(texto, clave_api=clave, modelo=modelo, anio_defecto=anio)
+    return resultado, uuid4().hex
 
 
-def _leer_pdf_con_ia(datos: bytes, cfg: dict) -> list[planpdf.Candidata] | None:
+def _leer_pdf_con_ia(datos: bytes, cfg: dict,
+                     nombre_archivo: str) -> list[planpdf.Candidata] | None:
     """Intenta la lectura con IA; None significa «que lo haga el lector clásico».
 
     Un fallo se recuerda por archivo (`ia_fallo_<firma>`) y no se reintenta:
     reintentar en cada reejecución sería pagar la llamada una y otra vez contra
     el mismo error. El lector clásico toma el relevo, y si el PDF está dañado o
     escaneado será él quien dé el diagnóstico definitivo.
+
+    `nombre_archivo` sólo sirve para el registro de gasto: la firma identifica
+    al archivo dentro de la sesión, pero en un registro que se lee semanas
+    después lo único reconocible es el nombre del plan.
     """
     firma_archivo = st.session_state.firma_archivo
     if st.session_state.get(f"ia_fallo_{firma_archivo}"):
         return None
     try:
         with st.spinner(f"Leyendo el PDF con IA ({cfg['model']})…"):
-            resultado = _tablas_del_pdf_ia(datos, ANIO_ACTUAL, cfg["api_key"], cfg["model"])
+            resultado, marca = _tablas_del_pdf_ia(
+                datos, ANIO_ACTUAL, cfg["api_key"], cfg["model"])
     except (ia.ErrorDeIA, planpdf.ErrorDePDF) as e:
         st.session_state[f"ia_fallo_{firma_archivo}"] = True
         st.warning(
-            f"No pude leer el PDF con IA y usé el lector clásico. Detalle: {e}",
-            icon="🤖",
+            f"No se pudo leer el PDF con IA; lo leyó el lector clásico. Detalle: {e}"
         )
         return None
 
     # El gasto se apunta aunque el modelo no haya encontrado nada: ya se pagó.
-    # Por archivo y no acumulando a ciegas, porque el caché hace que el mismo
-    # PDF no vuelva a costar y no debe volver a sumar.
-    st.session_state.setdefault("usos_ia", {})[firma_archivo] = resultado.uso
+    # Una llamada, un apunte: la marca dice si esta respuesta se acaba de pagar
+    # o venía del caché, así que las reejecuciones no suman de más y un PDF que
+    # el caché expulsó y hubo que volver a leer suma las dos veces. Por eso es
+    # una lista por archivo y no un solo `Uso` que se sobreescribe.
+    if marca not in st.session_state.setdefault("llamadas_ia", set()):
+        st.session_state.llamadas_ia.add(marca)
+        st.session_state.setdefault("usos_ia", {}).setdefault(firma_archivo, []).append(
+            resultado.uso)
+        # Y el mismo apunte en disco, que es lo que sobrevive a la sesión: la
+        # contabilidad de quien paga la clave no puede vivir en un
+        # `session_state` que se borra al cerrar la pestaña. Este es el único
+        # punto del programa donde consta que se pagó una llamada.
+        ia.apuntar_uso(resultado.uso, nombre_archivo, ia.ruta_registro(RAIZ))
     if not resultado.candidatas:
         st.session_state[f"ia_fallo_{firma_archivo}"] = True
         return None
@@ -937,22 +1114,22 @@ def sugerir_materia(nombre: str) -> None:
         return
     st.session_state.materia = nombre
     st.info(
-        f"Puse **{nombre}** como nombre de la materia, que es el que trae el plan. "
-        "Si no es así, cámbialo en **⚙️ Ajustes**, a la izquierda.",
-        icon="✏️",
+        f"Se tomó **{nombre}** como nombre de la materia, que es el que trae el "
+        "plan. Se puede cambiar en **Ajustes**, a la izquierda."
     )
 
 
 def _preseleccion(candidatas: list[planpdf.Candidata]) -> list[bool]:
-    """Qué tablas del PDF vienen marcadas de entrada.
+    """Qué tablas del PDF vienen marcadas de entrada: sólo las de actividades.
 
-    Las actividades siempre: son a lo que viene todo el mundo. Las
-    videoconferencias sólo si hay **una**; cuando el plan trae una tabla por
-    grupo, marcar cualquiera sería meterle al alumno las sesiones del asesor
-    equivocado, así que se le deja elegir la suya.
+    Las entregas son a lo que viene todo el mundo, y son las mismas para todos
+    los grupos. Las videoconferencias **nunca** vienen marcadas, ni cuando el
+    plan trae una sola tabla: a las sesiones en vivo va quien va, y meterlas en
+    el calendario sin que nadie las haya pedido es peor que pedir un clic de
+    más. Cuando el plan trae una tabla por grupo, además, marcar cualquiera
+    sería colarle al alumno las sesiones del asesor equivocado.
     """
-    videos = sum(1 for c in candidatas if c.tipo == planpdf.TIPO_VIDEOCONFERENCIAS)
-    return [c.tipo == planpdf.TIPO_ACTIVIDADES or videos == 1 for c in candidatas]
+    return [c.tipo == planpdf.TIPO_ACTIVIDADES for c in candidatas]
 
 
 def paso_lectura_pdf(datos: bytes, nombre_archivo: str) -> list[TablaActiva]:
@@ -971,11 +1148,19 @@ def paso_lectura_pdf(datos: bytes, nombre_archivo: str) -> list[TablaActiva]:
     candidatas = None
     cfg_ia = config_ia() if st.session_state.get("usar_ia", True) else None
     if cfg_ia:
-        candidatas = _leer_pdf_con_ia(datos, cfg_ia)
+        candidatas = _leer_pdf_con_ia(datos, cfg_ia, nombre_archivo)
     # Si la IA cobró pero no sirvió (falló o no encontró nada), las tablas que
     # se enseñan abajo son del lector clásico y la nota de costo no debe
     # atribuírselas al modelo.
     leidas_con_ia = candidatas is not None
+    # Qué lector armó estas candidatas entra en la clave de cada tabla: la
+    # identidad de una tabla del PDF es su posición en la lista, y los dos
+    # lectores no encuentran ni las mismas tablas ni en el mismo orden. Al
+    # apagar `usar_ia` —o si la IA falla a media sesión— «la tabla 2» pasa a ser
+    # otra, y sin esto heredaría la marca y el tipo corregido de la anterior.
+    # Con el lector dentro, las claves viejas quedan huérfanas y Streamlit las
+    # poda solas.
+    lector = "ia" if leidas_con_ia else "geo"
 
     if candidatas is None:
         try:
@@ -987,82 +1172,92 @@ def paso_lectura_pdf(datos: bytes, nombre_archivo: str) -> list[TablaActiva]:
 
     if not candidatas:
         st.error(
-            "No encontré dentro del PDF ninguna tabla de actividades ni de "
-            "videoconferencias. Copia la tabla a Excel o a Google Sheets y sube "
-            "ese archivo.",
-            icon="⚠️",
+            "No se encontró dentro del PDF ninguna tabla de actividades ni de "
+            "videoconferencias. Copiar la tabla a Excel o a Google Sheets y subir "
+            "ese archivo."
         )
         return []
-
-    # La nota del costo va aquí y no junto al éxito del final: se muestra aunque
-    # el usuario desmarque todo, porque los tokens ya se gastaron igual.
-    uso_ia = st.session_state.get("usos_ia", {}).get(st.session_state.firma_archivo)
-    if leidas_con_ia and uso_ia is not None:
-        st.caption(f"🤖 Tablas extraídas y resumidas por IA ({uso_ia.modelo}) · {uso_ia.resumen()}")
 
     # Una casilla por tabla y no un `st.radio`: el plan trae las actividades y
     # las videoconferencias en tablas distintas y casi siempre se quieren las
     # dos. Se dibuja aunque sólo haya una candidata, porque marcarla y
     # desmarcarla es también la forma de decir «ésta no es».
-    st.markdown("**¿Qué quieres pasar al calendario?** Marca una o varias.")
-    marcadas: list[int] = []
+    st.markdown(
+        "**Tablas encontradas en el PDF.** Marcar las que se van a exportar; "
+        "pueden ser varias."
+    )
+    marcadas: list[tuple[int, str]] = []
     for i, (candidata, marcada) in enumerate(zip(candidatas, _preseleccion(candidatas))):
-        # La clave lleva la firma del archivo: al cambiar de PDF, Streamlit poda
-        # las de antes y la preselección se vuelve a calcular con las nuevas.
-        clave = f"tabla_pdf_{st.session_state.firma_archivo}_{i}"
+        # La clave lleva la firma del archivo y el lector: al cambiar de PDF —o
+        # de lector— Streamlit poda las de antes y la preselección se vuelve a
+        # calcular con las nuevas.
+        clave_marca = f"tabla_pdf_{st.session_state.firma_archivo}_{lector}_{i}"
+        clave = firma(st.session_state.firma_archivo, "pdf", lector, i)
         # `value` sólo la primera vez, o Streamlit avisa de que el valor se está
         # fijando por dos vías.
-        inicial = {} if clave in st.session_state else {"value": marcada}
-        if st.checkbox(candidata.etiqueta(), key=clave, **inicial):
-            marcadas.append(i)
-    st.caption(
-        "Se exportan juntas al final. Si alguna quedó del tipo equivocado, "
-        "puedes corregirlo en el paso 2."
-    )
+        inicial = {} if clave_marca in st.session_state else {"value": marcada}
+        # Sin nada a la derecha: el tipo de cada tabla lo dice su propio nombre
+        # («Actividades — …», «Videoconferencias · grupo 8596 · …») y un control
+        # aparte repetía a la derecha lo que ya se lee a la izquierda.
+        elegida = st.checkbox(_etiqueta_candidata(candidata), key=clave_marca, **inicial)
+        if elegida:
+            marcadas.append((i, clave))
+    st.caption("Se exportan juntas al final.")
 
     # La materia es dato del documento, no de la tabla: da igual cuál se marque.
     sugerir_materia(candidatas[0].materia)
 
     if not marcadas:
-        st.warning("Marca al menos una tabla para seguir.", icon="⚠️")
+        st.warning("Marcar al menos una tabla para continuar.")
         return []
 
-    for i in marcadas:
+    for i, _ in marcadas:
         for aviso in candidatas[i].avisos:
-            st.warning(f"{candidatas[i].nombre}: {aviso}", icon="⚠️")
+            st.warning(f"{candidatas[i].nombre}: {aviso}")
 
     if len(marcadas) == 1:
-        elegida = candidatas[marcadas[0]]
+        elegida = candidatas[marcadas[0][0]]
         st.success(
-            f"Leí **{len(elegida.df)} filas** de «{elegida.nombre}» "
-            f"({_rango(elegida.paginas)} del PDF).",
-            icon="✅",
+            f"Se leyeron **{len(elegida.df)} filas** de «{elegida.nombre}» "
+            f"({_rango(elegida.paginas)} del PDF)."
         )
     else:
         detalle = " + ".join(
-            f"{len(candidatas[i].df)} de «{candidatas[i].nombre}»" for i in marcadas
+            f"{len(candidatas[i].df)} de «{candidatas[i].nombre}»" for i, _ in marcadas
         )
-        total = sum(len(candidatas[i].df) for i in marcadas)
-        st.success(f"Leí **{total} filas** en total: {detalle}.", icon="✅")
+        total = sum(len(candidatas[i].df) for i, _ in marcadas)
+        st.success(f"Se leyeron **{total} filas** en total: {detalle}.")
 
     activas = []
-    for i in marcadas:
+    for i, clave in marcadas:
         candidata = candidatas[i]
-        clave = firma(st.session_state.firma_archivo, "pdf", i)
         activas.append(TablaActiva(
             df=candidata.df,
-            # `Candidata.modo` es la propuesta; manda lo que el usuario haya
-            # dicho en el corrector del paso 2.
-            modo=modo_de(clave, candidata.modo),
+            # El tipo lo decide el lector, que es quien distingue una tabla de
+            # entregas de una de sesiones al reconocerla, y lo dice el nombre
+            # con el que la tabla sale en su casilla.
+            modo=candidata.modo,
             nombre=candidata.nombre,
             origen=f"{nombre_archivo} · {candidata.nombre}",
             clave=clave,
-            tipo_propuesto=candidata.modo,
         ))
     return activas
 
 
+def _etiqueta_candidata(candidata: planpdf.Candidata) -> str:
+    """Cómo se presenta una tabla del PDF en su casilla, sin iconos.
+
+    No se usa `Candidata.etiqueta()` porque ésa trae el icono del tipo. El tipo
+    lo dice el nombre de la tabla, que es lo primero que se lee; el guión largo
+    se conserva porque es lo que lo separa de su tamaño.
+    """
+    return (f"{candidata.nombre} — {len(candidata.df)} filas, "
+            f"{_rango(candidata.paginas)}")
+
+
 def _rango(paginas: list[int]) -> str:
+    if not paginas:
+        return "sin páginas"
     if len(paginas) == 1:
         return f"página {paginas[0]}"
     return f"páginas {min(paginas)} a {max(paginas)}"
@@ -1073,7 +1268,7 @@ def paso_lectura(datos: bytes, nombre: str) -> list[TablaActiva]:
 
     Un CSV o un Excel dan exactamente una; un PDF, tantas como marque el usuario.
     """
-    nueva_firma = firma(nombre, len(datos))
+    nueva_firma = firma_de_archivo(datos, nombre)
     if nueva_firma != st.session_state.firma_archivo:
         st.session_state.firma_archivo = nueva_firma
         st.session_state.hoja = None
@@ -1111,8 +1306,7 @@ def paso_lectura(datos: bytes, nombre: str) -> list[TablaActiva]:
 
     st.success(
         f"Tabla leída: **{len(lectura.df)} filas** y **{len(lectura.df.columns)} columnas**"
-        + (f" de la hoja «{lectura.hoja}»" if lectura.hoja else ""),
-        icon="✅",
+        + (f" de la hoja «{lectura.hoja}»" if lectura.hoja else "")
     )
     # La pregunta va aquí, con la tabla ya leída, porque es lo que permite
     # proponer la respuesta; y después del selector de hoja, porque cada hoja del
@@ -1130,7 +1324,7 @@ def paso_lectura(datos: bytes, nombre: str) -> list[TablaActiva]:
 
 
 # --------------------------------------------------------------------------- #
-# Paso 2 · Mapeo (sólo los campos del tipo elegido)
+# Paso 2 · Revisar y ajustar (mapeo de columnas + editor, tabla por tabla)
 # --------------------------------------------------------------------------- #
 
 # Una pestaña con el nombre entero del asesor dentro empuja a las demás fuera de
@@ -1153,84 +1347,59 @@ def etiquetas_de_pestania(activas: list[TablaActiva]) -> list[str]:
     """
     salida, vistos = [], {}
     for tabla in activas:
-        base = _recortar(tabla.etiqueta)
+        base = _recortar(tabla.nombre)
         vistos[base] = vistos.get(base, 0) + 1
         salida.append(base if vistos[base] == 1 else f"{base} ({vistos[base]})")
     return salida
 
 
-def corrector_de_tipo(tabla: TablaActiva) -> None:
-    """Segunda oportunidad para el tipo de una tabla del PDF.
+def paso_revisar(activas: list[TablaActiva], ajustes: dict) -> list[Evento]:
+    """Un solo paso para revisar: las columnas de cada tabla y sus eventos.
 
-    En el PDF el tipo lo dice la propia tabla y no se pregunta en el paso 1, así
-    que si `pdf.py` la clasificó mal —o si el plan trae una tabla rara— éste es
-    el único sitio donde el usuario puede desmentirlo.
+    Antes eran dos —«Configuración manual» y «Revisa los eventos»— y obligaban a
+    subir y bajar entre el desplegable de una tabla y el editor de la misma
+    tabla. Ahora cada pestaña trae las dos cosas, en ese orden.
 
-    Va **dentro** del desplegable de configuración manual, y de primero. Fuera se
-    leía como si la app volviera a preguntar lo mismo que el paso 1, donde el
-    usuario ya marcó esta tabla; ahí dentro está entre sus iguales, porque el
-    paso 2 entero es «ábreme sólo si algo salió mal» y esto es exactamente eso.
-
-    No hace falta aplicar el cambio a mano: tocar el widget reejecuta la página,
-    y el paso 1 vuelve a construir la tabla leyendo esta misma clave (`modo_de`).
+    Devuelve la unión editada de todas las tablas abiertas.
     """
-    st.caption("Si esta tabla no es lo que parece, cámbiale el tipo aquí:")
-    clave = f"tipo_{tabla.clave}"
-    inicial = ({} if clave in st.session_state
-               else {"index": list(TIPOS).index(tabla.tipo_propuesto)})
-    st.radio(
-        "Tipo de esta tabla",
-        list(TIPOS),
-        format_func=lambda m: TIPOS[m]["etiqueta"],
-        horizontal=True,
-        key=clave,
-        help="Lo saqué de la propia tabla del PDF. Cámbialo si me equivoqué.",
-        **inicial,
-    )
+    # El encabezado dice cuántos eventos hay, y eso no se sabe hasta haberlos
+    # construido: se le reserva el hueco y se rellena al final del paso (el
+    # patrón de «Empezar de nuevo»).
+    cabecera = st.container()
 
+    sitios = ([st.container()] if len(activas) == 1
+              else list(st.tabs(etiquetas_de_pestania(activas))))
 
-def campo_plantilla(modo: str) -> None:
-    st.text_input(
-        "Plantilla del título",
-        value=PLANTILLAS[modo],
-        help="Campos disponibles: {materia}, {unidad}, {titulo}. "
-             "Los campos vacíos se omiten junto con su separador.",
-        key=f"plantilla_{modo}",
-    )
+    salida: list[Evento] = []
+    listos = total = 0
+    for tabla, sitio in zip(activas, sitios):
+        with sitio:
+            mapeo = config_de_tabla(tabla, ajustes["dayfirst"])
+            eventos = construir_eventos(
+                tabla.df, mapeo,
+                materia=ajustes["materia"],
+                plantilla=plantilla_de(tabla.modo),
+                dayfirst=ajustes["dayfirst"],
+                anio_defecto=ajustes["anio_defecto"],
+                modo=tabla.modo,
+                duracion_horas=ajustes["duracion"],
+                rellenar_unidad=ajustes["rellenar"],
+                origen=tabla.origen,
+            )
+            listos += sum(1 for e in eventos if e.valido)
+            total += len(eventos)
+            salida.extend(editor_de_tabla(tabla, eventos, ajustes))
 
-
-def paso_mapeo(activas: list[TablaActiva], dayfirst: bool) -> list[dict]:
-    """Configuración manual de cada tabla; devuelve un mapeo por tabla."""
-    paso(2, "Configuración manual", "opcional — sólo si algo salió mal")
-
-    # La plantilla es una por tipo, no una por tabla, así que con dos tablas del
-    # mismo tipo sólo la dibuja la primera: dos widgets con la misma clave
-    # (`plantilla_<modo>`) serían un error de Streamlit, y dos plantillas
-    # distintas para el mismo tipo de evento no significarían nada.
-    primera_del_tipo: dict[str, int] = {}
-    for i, tabla in enumerate(activas):
-        primera_del_tipo.setdefault(tabla.modo, i)
-
-    if len(activas) == 1:
-        return [config_de_tabla(activas[0], dayfirst, None)]
-
-    salida = []
-    etiquetas = etiquetas_de_pestania(activas)
-    for i, (tabla, pestania) in enumerate(zip(activas, st.tabs(etiquetas))):
-        with pestania:
-            dueña = primera_del_tipo[tabla.modo]
-            salida.append(config_de_tabla(
-                tabla, dayfirst, None if dueña == i else etiquetas[dueña]))
+    con_problema = total - listos
+    with cabecera:
+        paso(2, "Revisar y ajustar",
+             f"{listos} eventos listos"
+             + (f", {con_problema} por revisar" if con_problema else ""))
     return salida
 
 
-def config_de_tabla(tabla: TablaActiva, dayfirst: bool,
-                    plantilla_en: str | None) -> dict:
-    """Mapeo de columnas de una tabla, y lo demás que se ajusta por tabla.
-
-    `plantilla_en` nombra la pestaña donde vive la plantilla de este tipo, o es
-    None si le toca dibujarla a ésta.
-    """
+def config_de_tabla(tabla: TablaActiva, dayfirst: bool) -> dict:
+    """Mapeo de columnas de una tabla; cerrado salvo que haga falta abrirlo."""
     df = tabla.df
     modo = tabla.modo
     principales, opcionales = deteccion.campos_de(modo)
@@ -1249,63 +1418,56 @@ def config_de_tabla(tabla: TablaActiva, dayfirst: bool,
     opciones = ["— ninguna —"] + list(df.columns)
     mapeo: dict[str, str | None] = {c: None for c in deteccion.CAMPOS}
 
-    def selector(campo: str, contenedor):
+    def selector(campo: str, contenedor, opcional: bool = False):
         sugerida = automatico.get(campo)
         indice = opciones.index(sugerida) if sugerida in opciones else 0
+        etiqueta = deteccion.etiqueta(campo, modo)
+        if opcional:
+            etiqueta = _como_opcional(etiqueta)
         elegida = contenedor.selectbox(
-            deteccion.etiqueta(campo, modo), opciones, index=indice,
-            key=f"map_{campo}_{clave}",
+            etiqueta, opciones, index=indice, key=f"map_{campo}_{clave}",
         )
         return None if elegida == "— ninguna —" else elegida
 
     # Se abre solo cuando de verdad hace falta intervenir.
     resumen = (
-        "⚠️ No encontré la columna de fechas — ábreme"
+        "No se encontró la columna de fechas. Abrir para elegirla."
         if falta_fecha else
-        f"🪄 Detecté {detectados} de {total} columnas automáticamente. "
-        "Ábreme sólo si algo quedó mal."
+        f"Se detectaron {detectados} de {total} columnas. "
+        "Abrir para elegirlas manualmente."
     )
     with st.expander(resumen, expanded=falta_fecha):
-        # De primero, porque es lo que hay que corregir antes que nada: si el
-        # tipo está mal, los campos de abajo son los del otro tipo de evento.
-        if tabla.tipo_propuesto:
-            corrector_de_tipo(tabla)
-            st.divider()
-
         for campo, col in zip(principales, st.columns(len(principales))):
             mapeo[campo] = selector(campo, col)
-        for campo, col in zip(opcionales, st.columns(len(opcionales))):
-            mapeo[campo] = selector(campo, col)
 
-        st.divider()
-        # La plantilla del título vivía en la barra lateral; se mudó aquí al
-        # poder haber dos tipos de evento abiertos a la vez, cada uno con la
-        # suya.
-        if plantilla_en is None:
-            campo_plantilla(modo)
-        else:
-            st.caption(
-                f"El título sale de la plantilla `{plantilla_de(modo)}`, la misma "
-                f"para todas las tablas de este tipo. Se ajusta en «{plantilla_en}»."
-            )
+        # Los opcionales, aparte y marcados: «Liga (Zoom, Meet…) o aula» casi
+        # nunca existe en la tabla de origen, y mezclado con los demás parecía un
+        # campo que faltaba llenar. Las actividades ya no tienen ninguno, y
+        # `st.columns(0)` revienta, así que el bloque entero es condicional.
+        if opcionales:
+            st.caption("Columnas opcionales; la mayoría de los planes no las traen.")
+            for campo, col in zip(opcionales, st.columns(len(opcionales))):
+                mapeo[campo] = selector(campo, col, opcional=True)
 
-        st.divider()
-        # En un PDF no hay «fila de títulos» que ajustar: los títulos los
-        # reconstruye `pdf.py` al armar la tabla. Si algo salió torcido, lo que
-        # sirve es marcar otra tabla en el paso 1 o corregir en el paso 3.
-        if tabla.fila_encabezado is None:
-            st.caption("Así quedó la tabla que saqué del PDF:")
-            st.dataframe(df.head(4), width="stretch", hide_index=True)
-        else:
+        # En un PDF no hay «fila de títulos» que ajustar —los títulos los
+        # reconstruye `pdf.py` al armar la tabla—, así que aquí no queda nada más
+        # que enseñar. Hubo una vista previa de la tabla extraída y **se quitó**:
+        # el editor de eventos va justo debajo, con las mismas filas y además
+        # editables, y ver la misma tabla dos veces seguidas hacía dudar de cuál
+        # de las dos era la que cuenta.
+        if tabla.fila_encabezado is not None:
+            st.divider()
             st.caption(
-                "Si los nombres de las columnas de arriba se ven raros, la tabla no "
-                "empieza donde creí. Corrige aquí en qué fila están los títulos:"
+                "Si los nombres de las columnas salen raros, la tabla empieza en "
+                "otra fila. Indicar aquí en cuál están los títulos:"
             )
             izq, der = st.columns([1, 3])
             nueva = izq.number_input(
                 "Fila de los títulos",
                 min_value=1, max_value=30, value=tabla.fila_encabezado + 1, step=1,
             )
+            # Ésta sí se queda: no repite el editor, sino la tabla **cruda**, que
+            # es lo único con lo que se puede juzgar si los títulos son títulos.
             der.dataframe(df.head(4), width="stretch", hide_index=True)
             if nueva - 1 != tabla.fila_encabezado:
                 st.session_state.fila_encabezado = int(nueva) - 1
@@ -1319,27 +1481,65 @@ def config_de_tabla(tabla: TablaActiva, dayfirst: bool,
     # aconsejaba justo lo contrario de lo correcto.
     if (modo == MODO_HORA and not mapeo["hora"]
             and not deteccion.hay_horarios(df, mapeo["fecha"])):
-        donde = ("en el desplegable de aquí arriba" if tabla.tipo_propuesto
-                 else "en el paso 1")
-        st.warning(
-            "Esta tabla no parece traer horarios. Si son entregas, cambia su tipo "
-            f"a «Actividades y entregas» {donde}.",
-            icon="⚠️",
-        )
+        # A dónde mandar depende del archivo. En CSV y Excel el tipo es una
+        # elección del usuario y se corrige con un clic en el paso 1; en el PDF
+        # lo pone el lector al reconocer la tabla y no hay ningún control que
+        # tocar, así que lo útil es revisar las horas abajo —o dejar la tabla
+        # fuera si no era ésta—.
+        if tabla.fila_encabezado is None:
+            st.warning(
+                "Esta tabla no parece traer horarios. Conviene revisar las horas "
+                "en la lista de abajo; si no son sesiones, desmarcarla en el paso 1."
+            )
+        else:
+            st.warning(
+                "Esta tabla no parece traer horarios. Si son entregas, cambiar su "
+                "tipo a «Actividades y entregas» en el paso 1."
+            )
     return mapeo
 
 
+def _como_opcional(etiqueta: str) -> str:
+    """«Fecha final (eventos de varios días)» → «Fecha final (opcional)».
+
+    Dos paréntesis seguidos no los lee nadie, así que la aclaración que ya trae
+    la etiqueta cede el sitio a la que importa aquí: que el campo se puede dejar
+    vacío. Sólo se sustituye si el paréntesis está al final; en «Liga (Zoom,
+    Meet…) o aula» se queda donde está.
+    """
+    if etiqueta.endswith(")") and " (" in etiqueta:
+        etiqueta = etiqueta[:etiqueta.rfind(" (")]
+    return f"{etiqueta} (opcional)"
+
+
 # --------------------------------------------------------------------------- #
-# Paso 3 · Revisión
+# El editor de cada tabla, dentro del paso 2
 # --------------------------------------------------------------------------- #
 
-def columnas_editor(modo: str) -> list[str]:
+def columnas_editor(modo: str, con_problema: bool = False) -> list[str]:
+    """Qué columnas enseña el editor de una tabla, y en qué orden.
+
+    Una entrega no lleva ni «Fecha final» ni «Lugar»: el mapeo del paso 2 ya no
+    pide esas columnas, así que saldrían siempre vacías. Los eventos de varios
+    días que salen de un rango escrito en una sola celda («del 20 al 25 de
+    octubre») se siguen exportando con su fecha final; lo que desapareció es la
+    columna, no el dato (ver `_desde_dataframe`).
+
+    «Revisar» sólo existe si hay algo que revisar. Es la única forma de avisar de
+    una fila que se quedó sin fecha, pero con todo en orden era una columna vacía
+    y sin explicación en cada tabla, y nadie entendía qué se le pedía.
+    """
     base = ["Incluir", "Título", "Fecha"]
-    base += ["Inicio", "Fin"] if modo == MODO_HORA else ["Fecha final"]
-    return base + ["Descripción", "Lugar", "Revisar"]
+    if modo == MODO_HORA:
+        base += ["Inicio", "Fin"]
+    base += ["Descripción"]
+    if modo == MODO_HORA:
+        base += ["Lugar"]
+    return base + (["Revisar"] if con_problema else [])
 
 
-def _a_dataframe(eventos: list[Evento], modo: str) -> pd.DataFrame:
+def _a_dataframe(eventos: list[Evento], modo: str,
+                 con_problema: bool = False) -> pd.DataFrame:
     datos = pd.DataFrame({
         "Incluir": [ev.valido for ev in eventos],
         "Título": [ev.titulo for ev in eventos],
@@ -1351,7 +1551,13 @@ def _a_dataframe(eventos: list[Evento], modo: str) -> pd.DataFrame:
         "Lugar": [ev.lugar for ev in eventos],
         "Revisar": [ev.problema for ev in eventos],
     })
-    return datos[columnas_editor(modo)]
+    # El índice se enseña (`hide_index=False`), y numerado desde 1: es lo que
+    # dice de un vistazo cuántas actividades trae la tabla, sin tener que
+    # contarlas ni bajar al pie. Sigue siendo un `RangeIndex`, así que
+    # `num_rows="dynamic"` puede seguir añadiendo filas —las numera N+1, N+2…—
+    # sin pedirle al usuario que invente el índice.
+    datos.index = pd.RangeIndex(1, len(datos) + 1)
+    return datos[columnas_editor(modo, con_problema)]
 
 
 def _hora(valor) -> time | None:
@@ -1362,31 +1568,56 @@ def _hora(valor) -> time | None:
     return None
 
 
-def _desde_dataframe(editado: pd.DataFrame, origen: str) -> list[Evento]:
+def _desde_dataframe(editado: pd.DataFrame, origen: str,
+                     originales: list[Evento]) -> list[Evento]:
+    """Vuelve a armar los eventos con lo que quedó en el editor.
+
+    `originales` es lo que se le dio a dibujar, y sirve para recuperar la **fecha
+    final** de las tablas de actividades, que ya no tienen columna para ella: un
+    rango escrito en una sola celda («del 20 al 25 de octubre») produce un evento
+    de varios días, y el `.ics` y Google Calendar lo pintan entero. Sin esto, dar
+    la vuelta por el editor lo convertiría en un evento de un día.
+
+    El índice del editor es 1..N y `num_rows="dynamic"` conserva el de cada fila
+    que ya existía —las nuevas siguen contando desde N+1—, así que es lo que
+    empareja cada fila con su evento de origen.
+    """
     salida: list[Evento] = []
+    lleva_columna = "Fecha final" in editado.columns
     for i, fila in editado.iterrows():
         if not bool(fila.get("Incluir")):
             continue
         fecha = fila.get("Fecha")
         if fecha is None or pd.isna(fecha):
             continue
+        inicio = pd.Timestamp(fecha).date()
+
         fin = fila.get("Fecha final")
+        fecha_fin = None if fin is None or pd.isna(fin) else pd.Timestamp(fin).date()
+        if fecha_fin is None and not lleva_columna:
+            previo = (originales[int(i) - 1]
+                      if 1 <= int(i) <= len(originales) else None)
+            # Sólo si sigue teniendo sentido: si el usuario corrigió la fecha de
+            # inicio a mano, el fin de antes puede haber quedado por detrás.
+            if previo is not None and previo.fecha_fin and previo.fecha_fin >= inicio:
+                fecha_fin = previo.fecha_fin
+
         salida.append(Evento(
             titulo=str(fila.get("Título") or "").strip() or "Actividad",
             descripcion=str(fila.get("Descripción") or "").strip(),
-            fecha_inicio=pd.Timestamp(fecha).date(),
-            fecha_fin=None if fin is None or pd.isna(fin) else pd.Timestamp(fin).date(),
+            fecha_inicio=inicio,
+            fecha_fin=fecha_fin,
             hora_inicio=_hora(fila.get("Inicio")),
             hora_fin=_hora(fila.get("Fin")),
             lugar=str(fila.get("Lugar") or "").strip(),
             origen=origen,
-            fila=int(i) + 1,
+            fila=int(i),
         ))
     return salida
 
 
 CONFIG_COLUMNAS = {
-    "Incluir": lambda: st.column_config.CheckboxColumn("✓", width="small", default=True),
+    "Incluir": lambda: st.column_config.CheckboxColumn(width="small", default=True),
     "Título": lambda: st.column_config.TextColumn(width="large", required=True),
     "Fecha": lambda: st.column_config.DateColumn(format="DD/MM/YYYY", width="small"),
     "Fecha final": lambda: st.column_config.DateColumn(format="DD/MM/YYYY", width="small"),
@@ -1394,94 +1625,76 @@ CONFIG_COLUMNAS = {
     "Fin": lambda: st.column_config.TimeColumn(format="HH:mm", width="small"),
     "Descripción": lambda: st.column_config.TextColumn(width="large"),
     "Lugar": lambda: st.column_config.TextColumn(width="small"),
-    "Revisar": lambda: st.column_config.TextColumn("⚠️", disabled=True, width="medium"),
+    "Revisar": lambda: st.column_config.TextColumn(disabled=True, width="medium"),
 }
-
-
-def paso_revision(activas: list[TablaActiva], mapeos: list[dict],
-                  ajustes: dict) -> list[Evento]:
-    """Muestra los eventos de cada tabla abierta y devuelve la unión editada."""
-    por_tabla = [
-        construir_eventos(
-            tabla.df, mapeo,
-            materia=ajustes["materia"],
-            plantilla=plantilla_de(tabla.modo),
-            dayfirst=ajustes["dayfirst"],
-            anio_defecto=ajustes["anio_defecto"],
-            modo=tabla.modo,
-            duracion_horas=ajustes["duracion"],
-            rellenar_unidad=ajustes["rellenar"],
-            origen=tabla.origen,
-        )
-        for tabla, mapeo in zip(activas, mapeos)
-    ]
-
-    listos = sum(1 for eventos in por_tabla for e in eventos if e.valido)
-    con_problema = sum(len(eventos) for eventos in por_tabla) - listos
-    paso(3, "Revisa los eventos",
-         f"opcional — {listos} listos" + (f", {con_problema} por revisar" if con_problema else ""))
-
-    if len(activas) == 1:
-        return editor_de_tabla(activas[0], por_tabla[0], ajustes)
-
-    salida: list[Evento] = []
-    pestanias = st.tabs(etiquetas_de_pestania(activas))
-    for tabla, eventos, pestania in zip(activas, por_tabla, pestanias):
-        with pestania:
-            salida.extend(editor_de_tabla(tabla, eventos, ajustes))
-    return salida
 
 
 def editor_de_tabla(tabla: TablaActiva, eventos: list[Evento],
                     ajustes: dict) -> list[Evento]:
+    """La tabla editable de los eventos de una tabla activa, ya en su pestaña."""
     if not eventos:
         st.warning(
-            "No encontré filas con datos. Abre «Configuración manual» arriba y revisa "
-            "que las columnas apunten a donde deben.",
-            icon="⚠️",
+            "No se encontraron filas con datos. Abrir el desplegable de columnas "
+            "de arriba y comprobar que cada una apunte a donde debe."
         )
         return []
 
     listos = sum(1 for e in eventos if e.valido)
     con_problema = len(eventos) - listos
+    # No es lo mismo que `con_problema`: una sesión con fecha pero sin hora es un
+    # evento válido y aun así tiene algo que decir («quedará como evento de todo
+    # el día»). La columna «Revisar» es el único sitio donde eso se lee, así que
+    # aparece en cuanto alguna fila trae texto — y sólo entonces.
+    hay_que_revisar = any(ev.problema for ev in eventos)
     st.caption(
-        f"{tabla.etiqueta} · {len(tabla.df)} filas leídas, {listos} eventos listos"
+        f"{TIPOS[tabla.modo]['etiqueta']} · {len(tabla.df)} filas leídas · "
+        f"{listos} eventos listos"
         + (f", {con_problema} por revisar" if con_problema else "")
     )
 
     if con_problema:
         st.warning(
-            f"{con_problema} fila(s) sin fecha que yo entienda; están desmarcadas y no "
-            "se exportarán. Escribe la fecha correcta en la tabla y se incluyen solas.",
-            icon="⚠️",
+            f"{con_problema} fila(s) sin una fecha reconocible; quedan desmarcadas "
+            "y no se exportan. Al escribir la fecha correcta en la tabla se "
+            "incluyen solas."
         )
 
     # La clave lleva todo lo que cambia el contenido del editor: si no, Streamlit
     # conserva las ediciones de la tabla anterior y las aplica a filas que ya no
-    # son las mismas.
-    clave = firma(tabla.clave, tabla.modo, len(eventos),
+    # son las mismas. `hay_que_revisar` entra porque decide si hay columna
+    # «Revisar», y una columna de más o de menos es otra tabla.
+    columnas = columnas_editor(tabla.modo, hay_que_revisar)
+    clave = firma(tabla.clave, tabla.modo, len(eventos), hay_que_revisar,
                   plantilla_de(tabla.modo), ajustes["materia"])
     editado = st.data_editor(
-        _a_dataframe(eventos, tabla.modo),
+        _a_dataframe(eventos, tabla.modo, hay_que_revisar),
         width="stretch",
-        hide_index=True,
+        # El índice va visible y numerado 1..N: es lo que dice cuántas
+        # actividades hay sin tener que contarlas.
+        hide_index=False,
         num_rows="dynamic",
         key=f"editor_{clave}",
-        column_config={c: CONFIG_COLUMNAS[c]() for c in columnas_editor(tabla.modo)},
+        column_config={c: CONFIG_COLUMNAS[c]() for c in columnas},
     )
-    return _desde_dataframe(editado, tabla.origen)
+    return _desde_dataframe(editado, tabla.origen, eventos)
 
 
 # --------------------------------------------------------------------------- #
-# Paso 4 · Exportar
+# Paso 3 · Exportar
 # --------------------------------------------------------------------------- #
 
 def paso_exportar(ajustes: dict, actuales: list[Evento]) -> None:
     """Todo junto: lo guardado de archivos anteriores y las tablas abiertas.
 
     `actuales` ya viene siendo la unión de todas las tablas activas, así que
-    aquí no queda ninguna decisión de qué incluir: lo que se ve en el paso 3 se
+    aquí no queda ninguna decisión de qué incluir: lo que se ve en el paso 2 se
     exporta.
+
+    Aquí no se repite la lista de eventos: está completa y editable un paso más
+    arriba, y volver a enseñarla hacía dudar de si había que revisarla otra vez.
+    Basta con el recuento por tabla. La excepción son los eventos de archivos
+    anteriores, que no salen en ninguna pestaña abierta y de otro modo quedarían
+    invisibles.
     """
     eventos: list[Evento] = st.session_state.guardados + actuales
     dia = sum(1 for e in eventos if e.todo_el_dia)
@@ -1490,40 +1703,42 @@ def paso_exportar(ajustes: dict, actuales: list[Evento]) -> None:
         p for p in (f"{dia} actividades" if dia else "",
                     f"{hora} sesiones" if hora else "") if p
     )
-    paso(4, "Manda todo a tu calendario", resumen, activo=bool(eventos))
+    paso(3, "Exportar al calendario", resumen, activo=bool(eventos))
 
     if not eventos:
-        nota("Sube un archivo arriba y aquí aparecerán las opciones para mandarlo "
-             "a tu calendario.")
+        nota("Al subir un archivo aparecen aquí las opciones para mandarlo al "
+             "calendario.")
         return
 
-    if st.session_state.guardados:
-        st.caption(
-            f"Incluye {len(st.session_state.guardados)} eventos que ya habías "
-            "cargado antes."
-        )
+    por_origen: dict[str, int] = {}
+    for ev in eventos:
+        por_origen[ev.origen] = por_origen.get(ev.origen, 0) + 1
+    detalle = " · ".join(f"{n} de «{origen}»" for origen, n in por_origen.items())
 
-    _, der = st.columns([3, 2])
+    izq, der = st.columns([3, 2])
+    izq.markdown(f"**{len(eventos)} eventos** en total — {detalle}")
     with der:
-        if st.button("🗑️ Quitar todos los eventos", width="stretch"):
+        if st.button("Quitar todos los eventos", width="stretch"):
             st.session_state.guardados = []
             olvidar_archivo()
             st.rerun()
 
-    with st.expander(f"📋 Ver los {len(eventos)} eventos que se van a crear"):
-        st.dataframe(
-            pd.DataFrame([{
-                "Título": ev.titulo,
-                "Cuándo": ev.resumen_fecha(),
-                "Tipo": "Todo el día" if ev.todo_el_dia else "Con horario",
-                "Origen": ev.origen,
-            } for ev in eventos]),
-            width="stretch", hide_index=True,
-        )
+    guardados = st.session_state.guardados
+    if guardados:
+        with st.expander(f"Ver los {len(guardados)} eventos de archivos anteriores"):
+            st.dataframe(
+                pd.DataFrame([{
+                    "Título": ev.titulo,
+                    "Cuándo": ev.resumen_fecha(),
+                    "Tipo": "Todo el día" if ev.todo_el_dia else "Con horario",
+                    "Origen": ev.origen,
+                } for ev in guardados]),
+                width="stretch", hide_index=True,
+            )
 
     directo, ics, enlaces, csv_google = st.tabs([
-        "🚀 Enviar a Google Calendar", "📅 Descargar archivo .ics",
-        "🔗 Enlaces (sirve en celular)", "📄 CSV de Google",
+        "Enviar a Google Calendar", "Descargar archivo .ics",
+        "Enlaces (sirve en celular)", "CSV de Google",
     ])
 
     with directo:
@@ -1531,11 +1746,11 @@ def paso_exportar(ajustes: dict, actuales: list[Evento]) -> None:
 
     with ics:
         st.markdown(
-            "El `.ics` es la opción más segura: respeta horarios y recordatorios, y si "
-            "vuelves a importarlo **actualiza** los eventos en vez de duplicarlos."
+            "El `.ics` es la opción más segura: respeta horarios y recordatorios, y "
+            "al volver a importarlo **actualiza** los eventos en vez de duplicarlos."
         )
         st.download_button(
-            "📥 Descargar .ics",
+            "Descargar .ics",
             data=exportar.a_ics(
                 eventos,
                 zona=ajustes["zona"],
@@ -1549,17 +1764,18 @@ def paso_exportar(ajustes: dict, actuales: list[Evento]) -> None:
             width="stretch",
         )
         st.markdown(
-            "**Cómo importarlo:** entra a [calendar.google.com](https://calendar.google.com) "
-            "en la computadora → ⚙️ **Configuración** → **Importar y exportar** → elige el "
-            "archivo, selecciona el calendario destino y pulsa **Importar**."
+            "**Cómo importarlo:** entrar a [calendar.google.com](https://calendar.google.com) "
+            "desde una computadora → **Configuración** → **Importar y exportar** → elegir "
+            "el archivo, seleccionar el calendario destino y pulsar **Importar**."
         )
 
     with enlaces:
         st.markdown(
-            "Cada liga abre Google Calendar con el evento **ya llenado**; sólo pulsas "
-            "*Guardar*. No pide ningún permiso y **es la única opción que funciona desde "
-            "el celular** (Google sólo deja importar archivos desde computadora).\n\n"
-            "A cambio, es un evento a la vez: para muchos eventos conviene más el `.ics`."
+            "Cada liga abre Google Calendar con el evento **ya llenado**; sólo falta "
+            "pulsar *Guardar*. No pide ningún permiso y **es la única opción que "
+            "funciona desde el celular** (Google sólo deja importar archivos desde "
+            "computadora).\n\n"
+            "A cambio, es un evento a la vez: para muchos conviene más el `.ics`."
         )
         st.dataframe(
             pd.DataFrame([{
@@ -1572,20 +1788,20 @@ def paso_exportar(ajustes: dict, actuales: list[Evento]) -> None:
             column_config={
                 "Evento": st.column_config.TextColumn(width="large"),
                 "Añadir": st.column_config.LinkColumn(
-                    "Abrir", display_text="➕ Añadir", width="small"
+                    "Abrir", display_text="Añadir", width="small"
                 ),
             },
         )
 
     with csv_google:
         st.markdown(
-            "Úsalo sólo si el `.ics` te falla. Google interpreta las fechas del CSV según "
-            "el idioma de tu cuenta; si los eventos caen en el día equivocado, cambia el "
-            "formato aquí abajo y vuelve a importar."
+            "Sólo si el `.ics` falla. Google interpreta las fechas del CSV según el "
+            "idioma de la cuenta; si los eventos caen en el día equivocado, cambiar "
+            "el formato aquí abajo y volver a importar."
         )
         etiqueta = st.selectbox("Formato de fecha", list(exportar.FORMATOS_CSV))
         st.download_button(
-            "📥 Descargar CSV",
+            "Descargar CSV",
             data=exportar.a_csv_google(
                 eventos, exportar.FORMATOS_CSV[etiqueta], ajustes["duracion"]
             ),
@@ -1599,22 +1815,21 @@ def pestania_envio_directo(eventos: list[Evento], ajustes: dict) -> None:
     cfg = config_google()
     if not cfg:
         st.info(
-            "El envío directo no está configurado en esta instalación. Usa la pestaña "
-            "**Descargar archivo .ics** — hace exactamente lo mismo.",
-            icon="ℹ️",
+            "El envío directo no está configurado en esta instalación. La pestaña "
+            "**Descargar archivo .ics** hace exactamente lo mismo."
         )
         with st.expander("¿Por qué no aparece el botón?"):
             st.markdown(AYUDA_SIN_CONFIGURAR)
         return
 
     if not st.session_state.credenciales:
-        st.warning("Primero conéctate con Google desde la barra lateral.", icon="🔗")
+        st.warning("Falta conectar con Google desde la barra lateral.")
         return
 
     try:
         calendarios = gcal.listar_calendarios(st.session_state.credenciales)
     except gcal.SesionCaducada as e:
-        st.warning(str(e), icon="⏱️")
+        st.warning(str(e))
         if st.button("Reconectar con Google", type="primary"):
             for clave in ("credenciales", "correo_google"):
                 st.session_state.pop(clave, None)
@@ -1631,14 +1846,22 @@ def pestania_envio_directo(eventos: list[Evento], ajustes: dict) -> None:
     # acabar el semestre se oculta o se borra entero sin tocar lo demás. Se pone
     # siempre primero (no sólo si hay materia) para que el orden de la lista no
     # dependa de si el campo de la barra lateral ya se aplicó.
-    nuevo = "➕ Crear un calendario nuevo para esta materia"
+    nuevo = "Crear un calendario nuevo para esta materia"
     opciones = [nuevo] + nombres
 
     izq, der = st.columns([3, 2])
     with izq:
-        elegido = st.selectbox("¿A qué calendario?", opciones)
+        # Se elige la **posición**, no el nombre: dos calendarios pueden
+        # llamarse igual (uno propio y otro compartido, o dos de semestres
+        # distintos) y buscar el elegido por su nombre daría siempre con el
+        # primero, mandando los eventos al calendario que no era.
+        elegido = st.selectbox(
+            "Calendario destino", range(len(opciones)),
+            format_func=lambda i: opciones[i],
+        )
+        es_nuevo = elegido == 0
         nombre_nuevo = materia
-        if elegido == nuevo:
+        if es_nuevo:
             # Editable aquí mismo: así no hay que volver a la barra lateral ni
             # confirmar nada allá para que este nombre sea el correcto.
             nombre_nuevo = st.text_input(
@@ -1651,11 +1874,11 @@ def pestania_envio_directo(eventos: list[Evento], ajustes: dict) -> None:
         st.caption(f"Zona horaria: **{ajustes['zona']}**")
 
     validos = [ev for ev in eventos if ev.valido]
-    if st.button(f"🚀 Crear {len(validos)} eventos en Google Calendar",
+    if st.button(f"Crear {len(validos)} eventos en Google Calendar",
                  type="primary", width="stretch"):
         with st.status("Conectando con Google…", expanded=True) as estado:
             try:
-                if elegido == nuevo:
+                if es_nuevo:
                     estado.update(label="Creando el calendario…")
                     calendario_id = gcal.crear_calendario(
                         st.session_state.credenciales,
@@ -1663,7 +1886,9 @@ def pestania_envio_directo(eventos: list[Evento], ajustes: dict) -> None:
                         ajustes["zona"],
                     )
                 else:
-                    calendario_id = calendarios[nombres.index(elegido)]["id"]
+                    # La opción 0 es «crear uno nuevo», así que el resto van
+                    # corridas una posición respecto de `calendarios`.
+                    calendario_id = calendarios[elegido - 1]["id"]
 
                 barra = st.progress(0.0)
 
@@ -1692,8 +1917,7 @@ def pestania_envio_directo(eventos: list[Evento], ajustes: dict) -> None:
             f"Se crearon **{resultado['creados']}** eventos"
             + (f" y se omitieron {resultado['omitidos']} que ya existían"
                if resultado["omitidos"] else "")
-            + ".",
-            icon="🎉",
+            + "."
         )
         st.balloons()
         if resultado["errores"]:
@@ -1728,9 +1952,10 @@ def main() -> None:
     st.markdown(
         """
         <div class="bloque-titulo">
-          <h1>📅 Exportar Plan de Trabajo a Google Calendar</h1>
-          <p>Sube el plan de trabajo de tu materia y pasa las entregas y las
-             videoconferencias a tu calendario en un par de clics. Sin instalar nada.</p>
+          <h1>Exportar Plan de Trabajo a Google Calendar</h1>
+          <p>El plan de trabajo en PDF, Excel o CSV se convierte en eventos de Google
+             Calendar: las entregas y las videoconferencias quedan agendadas en unos
+             cuantos clics, desde el navegador y sin instalar nada.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1738,10 +1963,7 @@ def main() -> None:
 
     restaurados = st.session_state.pop("aviso_restaurado", 0)
     if restaurados:
-        st.success(
-            f"Listo, ya estás conectado. Tus {restaurados} eventos siguen aquí.",
-            icon="✅",
-        )
+        st.success(f"Conexión lista. Los {restaurados} eventos siguen aquí.")
 
     # «Empezar de nuevo» y «Conectar con Google» van arriba de todo en la barra
     # lateral, pero se dibujan al final: el primero necesita saber si hay
@@ -1758,22 +1980,21 @@ def main() -> None:
     if archivo is not None:
         activas = paso_lectura(*archivo)
         # «Añadir otro archivo» cierra el paso 1, pero no puede dibujarse aún:
-        # cuántos eventos hay no se sabe hasta el paso 3. Se le reserva el hueco
+        # cuántos eventos hay no se sabe hasta el paso 2. Se le reserva el hueco
         # y se rellena al final del ciclo.
         hueco_otro_archivo = st.container()
 
     # La barra lateral va después del paso 1 porque necesita saber si alguna de
-    # las tablas abiertas trae horario; y antes del paso 2, que usa su `dayfirst`.
+    # las tablas abiertas trae horario; y antes del paso 2, que usa su `dayfirst`
+    # y las plantillas del título que se ajustan ahí.
     with contenedor_ajustes:
         ajustes = barra_lateral(hay_sesiones_con_horario(activas), dibujar_google=False)
 
     actuales: list[Evento] = []
     if activas:
-        mapeos = paso_mapeo(activas, ajustes["dayfirst"])
-        actuales = paso_revision(activas, mapeos, ajustes)
+        actuales = paso_revisar(activas, ajustes)
     else:
-        paso(2, "Configuración manual", "opcional", activo=False)
-        paso(3, "Revisa los eventos", "opcional", activo=False)
+        paso(2, "Revisar y ajustar", activo=False)
 
     paso_exportar(ajustes, actuales)
 
@@ -1788,84 +2009,94 @@ def main() -> None:
         st.divider()
     with st.sidebar:
         pie_lateral()
+        # Lo último de la barra lateral, debajo del crédito: sólo lo busca quien
+        # sabe que está ahí, y sin contraseña configurada no se dibuja nada.
+        panel_admin()
 
-    with st.expander("❓ Preguntas frecuentes"):
+    with st.expander("Preguntas frecuentes"):
         st.markdown(
             """
-**¿Tengo que confirmar algo para que se creen los eventos?**
-No. Todo lo que ves en el paso 3 ya está incluido; ve directo al paso 4 y elige
-cómo mandarlo a tu calendario.
+**¿Hay que confirmar algo para que se creen los eventos?**
+No. Todo lo que aparece en el paso 2 ya cuenta; en el paso 3 sólo se elige cómo
+mandarlo al calendario.
 
-**Tengo las actividades y las videoconferencias en tablas separadas.**
-Si las dos vienen dentro del mismo PDF, márcalas juntas en el paso 1 y listo.
-Si están en archivos distintos, sube el primero y al terminar el paso 1 pulsa
-**«➕ Añadir otro archivo»**: se guarda lo que llevas y puedes subir el otro. Al
-final se exportan juntas.
+**Las actividades y las videoconferencias están en tablas separadas.**
+Si las dos vienen dentro del mismo PDF, se marcan juntas en el paso 1. Si están
+en archivos distintos, subir el primero y pulsar **«Añadir otro archivo»** al
+final del paso 1: se guardan los eventos actuales y queda libre el recuadro para
+el siguiente. Al final se exportan juntas.
 
-**Me equivoqué y quiero empezar de cero.**
-En el paso 4, **«Quitar todos los eventos»**.
+**Empezar de cero.**
+En el paso 3, **«Quitar todos los eventos»**; en la barra lateral,
+**«Empezar de nuevo»** borra además el nombre de la materia.
 
-**¿En qué se diferencian «Quitar archivo» y «➕ Añadir otro archivo»?**
+**¿En qué se diferencian «Quitar archivo» y «Añadir otro archivo»?**
 Los dos vacían el recuadro del paso 1, pero **«Quitar archivo» descarta** los
-eventos de la tabla que tienes abierta —es el botón para cuando subiste el que
-no era— y **«➕ Añadir otro archivo» los conserva**, que es el que quieres si vas
-a sumar una segunda tabla. Lo que ya estaba guardado de archivos anteriores no
-lo toca ninguno de los dos.
+eventos de la tabla abierta —es el botón para cuando el archivo subido no era el
+correcto— y **«Añadir otro archivo» los conserva**, que es el que corresponde
+para sumar una segunda tabla. Lo guardado de archivos anteriores no lo toca
+ninguno de los dos.
 
-**¿Puedo subir el plan de trabajo en PDF, sin tocarlo?**
-Sí, es lo más rápido. La app busca dentro sus tablas y te las enseña con una
-casilla cada una para que marques las que quieras. Si prefieres, también acepta
-la tabla ya pasada a CSV o Excel.
+**¿Se puede subir el plan de trabajo en PDF, sin tocarlo?**
+Sí, es lo más rápido. La app busca dentro sus tablas y las muestra con una
+casilla cada una. También acepta la tabla ya pasada a CSV o Excel.
 
-**Me salen varias tablas de videoconferencias.**
-Tu plan trae un grupo por asesor, así que no marco ninguna: elige la de tu
-asesor, que aparece con su nombre al lado del número de grupo.
+**Aparecen varias tablas de videoconferencias.**
+El plan trae un grupo por asesor, así que no viene marcada ninguna: hay que
+elegir la del asesor propio, que aparece con su nombre al lado del número de
+grupo.
 
-**Marqué una tabla y la trata como si fuera del otro tipo.**
-En el paso 2, arriba de «Configuración manual», cambia el **tipo de esa tabla**.
-Si el archivo es CSV o Excel, el tipo se cambia en el paso 1.
+**Una tabla quedó del tipo equivocado.**
+En un CSV o un Excel, el tipo se cambia en el paso 1, con el selector que sale al
+leer el archivo; la pestaña del paso 2 se acomoda sola. En un PDF lo pone la app
+al reconocer cada tabla y lo dice el nombre de su casilla: si una no es lo que
+dice ser, lo que corresponde es desmarcarla.
 
-**Subí el PDF y no encontró mis tablas.**
-Puede que tu plan venga con un formato que la app todavía no reconoce, o que el
-PDF sea una imagen escaneada (una foto de la hoja, sin texto que se pueda
-copiar). Copia la tabla, pégala en Excel o Google Sheets y sube ese archivo: de
-ahí en adelante todo funciona igual.
+**El PDF se subió y no se encontraron las tablas.**
+Puede que el plan traiga un formato que la app todavía no reconoce, o que el PDF
+sea una imagen escaneada (una foto de la hoja, sin texto que se pueda copiar).
+Copiar la tabla, pegarla en Excel o Google Sheets y subir ese archivo: de ahí en
+adelante todo funciona igual.
 
-**No me lee bien el Excel.**
-Abre **«Configuración manual»** en el paso 2: ahí puedes corregir en qué fila
-están los títulos de las columnas y qué es cada una. Si tu archivo es `.xls`
-viejo, ábrelo en Excel y guárdalo como `.xlsx`.
+**El Excel no se lee bien.**
+En el paso 2, abrir el desplegable de columnas: ahí se corrige en qué fila están
+los títulos y qué es cada columna. Si el archivo es `.xls` viejo, conviene
+abrirlo en Excel y guardarlo como `.xlsx`.
 
 **Las fechas salieron en el día equivocado.**
-En la barra lateral, dentro de «Ajustes avanzados», cambia si `03/04/2026` debe
-leerse como día/mes o mes/día. También puedes corregir cualquier fecha a mano en
-la tabla del paso 3.
+En la barra lateral, dentro de «Ajustes avanzados», se elige si `03/04/2026` se
+lee como día/mes o mes/día. Cualquier fecha se puede corregir a mano en la tabla
+del paso 2.
 
-**Mi plan trae las fechas sin año** («21 de agosto»).
-Pon el año correcto en «Año para fechas escritas sin año».
+**El plan trae las fechas sin año** («21 de agosto»).
+Poner el año correcto en «Año para fechas escritas sin año».
 
 **No aparece el botón de enviar a Google.**
-Esa parte la configura quien publica la app (ver `docs/DESPLIEGUE.md`). Mientras
-tanto, descarga el `.ics`: el resultado es idéntico.
+Esa parte la configura quien publica la app (ver `docs/DESPLIEGUE.md`).
+Entretanto, el `.ics` da un resultado idéntico.
 
-**Ya importé y quiero volver a hacerlo.**
-Vuelve a importar el mismo `.ics`: Google reconoce los eventos y los actualiza en
-lugar de duplicarlos. Si usas el envío directo, deja marcada la casilla
-«No duplicar eventos que ya existan».
+**Ya se importó una vez y hay que repetirlo.**
+Volver a importar el mismo `.ics`: Google reconoce los eventos y los actualiza en
+lugar de duplicarlos. Con el envío directo, dejar marcada la casilla «No duplicar
+eventos que ya existan».
+
+**¿Cómo se cambia el título de los eventos?**
+En la barra lateral, «Ajustes avanzados»: hay una plantilla por tipo de evento,
+con los campos `{materia}`, `{unidad}` y `{titulo}`.
 
 **¿La app usa inteligencia artificial?**
 Sólo para leer el PDF, y sólo si quien publica la app configuró una clave de
 OpenAI: un modelo GPT encuentra las tablas —venga el plan en el formato que
-venga— y **resume la descripción de cada actividad** en un par de frases.
-Sin clave, o apagándolo en «Ajustes avanzados», trabaja el lector clásico, que
-no envía nada a ningún servicio.
+venga— y **resume la descripción de cada actividad** en un par de frases. Sin
+clave, o apagándola en «Ajustes avanzados», trabaja el lector clásico, que no
+envía nada a ningún servicio.
 
-**¿Se guarda mi información?**
-No. El archivo se procesa en memoria mientras usas la página y no se almacena.
-El permiso de Google sólo se usa para crear los eventos que confirmes. Si esta
-instalación tiene la lectura con IA activada, el texto del PDF se envía a la API
-de OpenAI para extraer las tablas; la API no lo usa para entrenar modelos y la
-app no lo guarda.
+**¿Se guarda la información?**
+No. El archivo se procesa en memoria mientras la página está abierta y no se
+almacena. El permiso de Google sólo se usa para crear los eventos exportados. Si
+esta instalación tiene la lectura con IA activada, el texto del PDF se envía a la
+API de OpenAI para extraer las tablas; la API no lo usa para entrenar modelos y
+la app no lo guarda.
             """
         )
 

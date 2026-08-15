@@ -198,12 +198,45 @@ api_key = "sk-..."
 ```
 
 **Quien pone la clave paga los tokens de todos los usuarios.** Cada lectura
-cuesta dinero de verdad (la app enseña el costo de cada PDF y el acumulado de la
-sesión en «Ajustes avanzados»); antes de repartir la liga con esto activado,
-corre `medir_ia.py` para saber cuánto te costaría por alumno. Sin esta sección
-la app funciona igual con el lector clásico, que es gratuito. En local, la clave
-puede ir en la variable de entorno `OPENAI_API_KEY` o en `env/openai_secret.json`
-(`{"api_key": "sk-..."}`).
+cuesta dinero de verdad; antes de repartir la liga con esto activado, corre
+`medir_ia.py` para saber cuánto te costaría por alumno. La app **no le enseña
+ningún costo al estudiante** —no es él quien lo paga y no decide nada con esa
+cifra—: el gasto se consulta en el panel de administración (aquí abajo). Sin
+esta sección la app funciona igual con el lector clásico, que es gratuito. En
+local, la clave puede ir en la variable de entorno `OPENAI_API_KEY` o en
+`env/openai_secret.json` (`{"api_key": "sk-..."}`).
+
+### Panel de administración (ver el gasto de la IA)
+
+Al fondo de la barra lateral, debajo del crédito, puede aparecer un desplegable
+**«Administración»** con lo que ha costado la lectura con IA: el gasto de la
+sesión abierta y el acumulado de todas —lecturas, tokens y dólares, con
+desglose por día y por archivo—.
+
+**Sólo existe si le pones contraseña.** Sin ella no se dibuja nada: ni el
+desplegable. En la nube, en los mismos *Secrets*:
+
+```toml
+[admin]
+clave = "la-que-tú-elijas"
+```
+
+En local, en `env/admin_secret.json` (esa carpeta está en `.gitignore`):
+
+```json
+{"clave": "la-que-tú-elijas"}
+```
+
+Cada lectura pagada se apunta como una línea de `env/registro_ia.jsonl` —fecha,
+archivo, modelo, tokens y costo—, que es de donde sale el acumulado. Dos
+advertencias sobre ese archivo:
+
+- **En Streamlit Cloud es efímero.** El disco de la app se rehace en cada
+  redespliegue (y cada vez que la app despierta tras dormirse), así que el
+  registro de la nube sirve para mirar los últimos días y nada más. El
+  histórico de verdad es el de tu computadora.
+- Si falla la escritura (disco lleno, permisos), la app **no se entera ni se
+  detiene**: se pierde el apunte, no la lectura del PDF.
 
 > **El `redirect_uri` no hace falta ponerlo**: la app usa su propia URL, que es
 > justo lo que registraste en el paso 3. Sólo agrégalo como tercera línea si
@@ -262,12 +295,14 @@ no admite la diagonal final y déjalo vacío).
 ## Cómo está organizado el código
 
 ```
-app.py                        Interfaz Streamlit (los 4 pasos)
+app.py                        Interfaz Streamlit (los 3 pasos)
 tabla_calendar/
 ├── tablas.py                 Lee CSV/Excel/ODS, detecta la fila de encabezado
 ├── fechas.py                 Interpreta fechas y horas en español
 ├── deteccion.py              Adivina qué columna es cuál (nombre + contenido)
 ├── modelo.py                 Evento y armado de eventos desde la tabla
+├── pdf.py                    Saca las tablas de un PDF midiendo su rejilla
+├── ia.py                     Lee el PDF con un modelo de OpenAI; registro de gasto
 ├── exportar.py               Genera .ics y CSV de Google
 └── google_calendar.py        OAuth e inserción vía API
 docs/                         Este archivo y el instructivo

@@ -112,10 +112,14 @@ class Candidata:
             partes.append(self.asesor)
         return " · ".join(partes)
 
+    def detalle(self) -> str:
+        """Lo que va detrás del nombre: cuántas filas trae y de qué páginas."""
+        return f"{len(self.df)} filas, {_rango_paginas(self.paginas)}"
+
     def etiqueta(self) -> str:
         """Nombre largo, para que el usuario elija entre las candidatas."""
         icono = "📝" if self.tipo == TIPO_ACTIVIDADES else "🎥"
-        return f"{icono} {self.nombre} — {len(self.df)} filas, {_rango_paginas(self.paginas)}"
+        return f"{icono} {self.nombre} — {self.detalle()}"
 
 
 def es_pdf(nombre: str) -> bool:

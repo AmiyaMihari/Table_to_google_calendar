@@ -19,10 +19,17 @@ CAMPOS = (
 
 # Qué columnas tiene sentido pedir según el tipo de evento. Mostrar sólo éstas
 # evita el batidillo de mezclar campos de entregas con campos de asesorías.
+#
+# Una entrega no tiene ni «Fecha final» ni «Lugar»: se pedían como opcionales y
+# ningún plan las traía, así que los dos selectores decían siempre «— ninguna —»
+# y hacían dudar de si faltaba algo por llenar. Los rangos escritos dentro de la
+# propia celda de fecha («del 20 al 25 de octubre») siguen dando un evento de
+# varios días — eso lo resuelve `fechas.parse_fecha_fin` y no una columna
+# aparte—, así que quitar el campo no quita ninguna función.
 CAMPOS_POR_MODO = {
     "dia": {
         "principales": ("fecha", "titulo", "unidad", "descripcion"),
-        "opcionales": ("fecha_fin", "lugar"),
+        "opcionales": (),
     },
     "hora": {
         "principales": ("fecha", "titulo", "hora", "hora_fin"),
