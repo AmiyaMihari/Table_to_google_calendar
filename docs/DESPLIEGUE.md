@@ -187,6 +187,24 @@ client_secret = "GOCSPX-xxxxxxxxxxxxxxxx"
 
 **Save.** La app se reinicia sola y aparece el botón **Conectar con Google**.
 
+Si además quieres que **el PDF lo lea un modelo de OpenAI** (extrae las tablas
+de cualquier formato de plan y resume las descripciones), añade en los mismos
+*Secrets* una clave de la [API de OpenAI](https://platform.openai.com/):
+
+```toml
+[openai]
+api_key = "sk-..."
+# model = "gpt-5-mini"   # opcional; éste es el que se usa si no dices nada
+```
+
+**Quien pone la clave paga los tokens de todos los usuarios.** Cada lectura
+cuesta dinero de verdad (la app enseña el costo de cada PDF y el acumulado de la
+sesión en «Ajustes avanzados»); antes de repartir la liga con esto activado,
+corre `medir_ia.py` para saber cuánto te costaría por alumno. Sin esta sección
+la app funciona igual con el lector clásico, que es gratuito. En local, la clave
+puede ir en la variable de entorno `OPENAI_API_KEY` o en `env/openai_secret.json`
+(`{"api_key": "sk-..."}`).
+
 > **El `redirect_uri` no hace falta ponerlo**: la app usa su propia URL, que es
 > justo lo que registraste en el paso 3. Sólo agrégalo como tercera línea si
 > tienes la app detrás de un dominio propio o un proxy, y entonces debe coincidir

@@ -461,8 +461,13 @@ def _paginas_con_texto(pdf) -> int:
     return sum(1 for p in pdf.pages if len(p.extract_text() or "") >= _MINIMO_CARACTERES_POR_PAGINA)
 
 
-def extraer(datos: bytes, anio_defecto: int = 2026) -> list[Candidata]:
-    """Bytes de un PDF → lista de tablas candidatas, la mejor primero."""
+def _abrir(datos: bytes):
+    """Abre el PDF y comprueba que tenga texto, con los mensajes de siempre.
+
+    Lo comparten `extraer` y `texto_completo`: los dos leen el mismo archivo y
+    fallan por los mismos motivos, y el usuario tiene que ver el mismo aviso
+    lea quien lea el PDF.
+    """
     if not DISPONIBLE:
         raise ErrorDePDF(
             "Falta la librería para leer PDF. Instálala con: pip install pdfplumber"
@@ -478,14 +483,37 @@ def extraer(datos: bytes, anio_defecto: int = 2026) -> list[Candidata]:
             f"ni dañado.\n\nDetalle: {type(e).__name__}: {e}"
         ) from e
 
-    with pdf:
-        if _paginas_con_texto(pdf) == 0:
-            raise ErrorDePDF(
-                "Este PDF es una imagen escaneada: no tiene texto que se pueda "
-                "leer, sólo la foto de la página. Copia la tabla a Excel o a "
-                "Google Sheets y sube ese archivo."
-            )
+    if _paginas_con_texto(pdf) == 0:
+        pdf.close()
+        raise ErrorDePDF(
+            "Este PDF es una imagen escaneada: no tiene texto que se pueda "
+            "leer, sólo la foto de la página. Copia la tabla a Excel o a "
+            "Google Sheets y sube ese archivo."
+        )
+    return pdf
 
+
+def texto_completo(datos: bytes) -> str:
+    """Bytes de un PDF → su texto plano, con un marcador por página.
+
+    Es la entrada del lector con IA (`tabla_calendar.ia`): el modelo no ve la
+    rejilla de `pdfplumber`, sino el documento tal como se lee. Los marcadores
+    «=== Página N ===» son lo que le permite decir en qué página encontró cada
+    tabla, igual que hace `Candidata.paginas`.
+    """
+    with _abrir(datos) as pdf:
+        trozos = []
+        for pagina in pdf.pages:
+            texto = pagina.extract_text() or ""
+            if not texto.strip():
+                continue
+            trozos.append(f"=== Página {pagina.page_number} ===\n{texto}")
+    return "\n\n".join(trozos)
+
+
+def extraer(datos: bytes, anio_defecto: int = 2026) -> list[Candidata]:
+    """Bytes de un PDF → lista de tablas candidatas, la mejor primero."""
+    with _abrir(datos) as pdf:
         materia = _materia_de(pdf)
 
         # Un grupo abierto por tipo: la tabla sigue en la página siguiente,

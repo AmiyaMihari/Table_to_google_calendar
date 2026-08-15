@@ -1,7 +1,52 @@
 # Pendientes
 
-Estado al 8 de agosto de 2026. La app está desplegada en
+Estado al 15 de agosto de 2026. La app está desplegada en
 <https://suayed-autocalendar.streamlit.app/> y funciona de la tabla en adelante.
+
+---
+
+## 0. Lectura del PDF con IA (decisión del 15 de agosto de 2026)
+
+La revisión manual contra los 9 PDFs nuevos enseñó discrepancias que el lector
+geométrico no cubre, y el dueño decidió **invertir la decisión del punto 1**: el
+motor de lectura del PDF pasa a ser un modelo de lenguaje —de **OpenAI**, porque
+su clave ya vive en `env/`— que además **resume la descripción de cada
+actividad** (los enunciados enteros no caben bien en un evento de calendario).
+La meta declarada es medir cuánto costaría en tokens escalar esto a la
+comunidad.
+
+Cómo quedó:
+
+- **`tabla_calendar/ia.py`** llama a la API de OpenAI con salida estructurada
+  estricta (esquema JSON) y devuelve las mismas `Candidata` de `pdf.py`: el
+  resto del flujo no sabe quién leyó el PDF. Modelo por defecto `gpt-5-mini`
+  (decisión del dueño: proveedor OpenAI porque su clave ya está ahí),
+  cambiable en los Secrets (`[openai] model = ...`).
+- **El lector clásico no se fue**: es el respaldo automático cuando no hay clave,
+  cuando la IA falla y cuando el usuario la apaga en «Ajustes avanzados». CSV y
+  Excel siguen siendo deterministas y gratuitos.
+- **Cada lectura enseña su costo** (tokens y USD) y la sesión acumula el gasto
+  en la barra lateral. Un fallo por archivo no se reintenta solo: cada reintento
+  sería volver a pagar.
+- **`medir_ia.py`** (raíz del repo) mide el costo real por PDF sobre
+  `testing_files/` y proyecta a 100/500 alumnos; `--simular` estima sin clave.
+- **Quién paga sigue abierto**: la clave en Secrets significa que el dueño paga
+  todos los tokens. No hay tope por sesión todavía; decidirlo antes de repartir
+  la liga con la IA encendida.
+- **Medido el 15 de agosto de 2026 con clave real** (`medir_ia.py`, 14 PDFs,
+  dos modelos):
+  - **gpt-5-mini** — $0.0077 por PDF (≈ $0.77 por 100 alumnos). Clava el conteo
+    del lector clásico en 11 de 14 planes y **arregla los dos donde el clásico
+    se rompía**: Mercadotecnia (15 actividades donde el clásico sacaba 1) y
+    Razonamiento Lógico (13 donde sacaba 6). Es el por defecto.
+  - **gpt-4o-mini** — $0.0018 por PDF, pero **pierde filas en silencio** en 5
+    planes (a Fundamentos de análisis cuantitativo le borra las 8
+    videoconferencias; a Bases de Datos, Derecho, Discretas y Financieras les
+    quita 1–2 actividades). Perder una entrega sin avisar es el peor fallo
+    posible aquí: descartado como motor.
+- **Pendiente**: revisar a ojo la actividad de más que gpt-5-mini ve en PNL
+  (9 vs 8 del clásico) y las 13 de Razonamiento Lógico contra el PDF; y decidir
+  tope de gasto por sesión antes de repartir la liga.
 
 ---
 
@@ -41,7 +86,12 @@ una fecha que se entiende).
 - **Un plan de una familia nueva** seguramente falle. Para eso está la señal de
   confianza y el aviso de «no pude leer esto»; el flujo manual sigue en pie.
 
-### Decisión: sin LLM en el motor
+### Decisión: sin LLM en el motor — **invertida el 15 de agosto de 2026, ver punto 0**
+
+> Se conserva el razonamiento original porque sigue siendo cierto a medias: el
+> lector geométrico acierta en las dos familias conocidas y es el respaldo
+> gratuito. Lo que cambió es que aparecieron formatos nuevos, y que el resumen
+> de descripciones —que sí necesita un modelo— pasó a ser requisito.
 
 Lo que varía entre planes es la **geometría de la tabla**, no el idioma. Las 22
 cadenas reales de fecha y hora de los cinco PDFs de `testing_files/` las acierta

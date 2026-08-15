@@ -19,7 +19,7 @@ from urllib.parse import urlsplit, urlunsplit
 import pandas as pd
 import streamlit as st
 
-from tabla_calendar import deteccion, exportar, tablas
+from tabla_calendar import deteccion, exportar, ia, tablas
 from tabla_calendar import google_calendar as gcal
 from tabla_calendar import pdf as planpdf
 from tabla_calendar.modelo import (
@@ -244,6 +244,18 @@ def config_google() -> dict | None:
     )
 
 
+def config_ia() -> dict | None:
+    """Clave y modelo para leer el PDF con IA: Secrets, variable de entorno o env/.
+
+    Sin clave la app funciona igual con el lector geométrico de `pdf.py`; la IA
+    la configura quien publica la app y es quien paga sus tokens, así que aquí
+    sólo se comprueba si existe.
+    """
+    if not ia.DISPONIBLE:
+        return None
+    return ia.leer_config(st.secrets) or ia.buscar_clave_local(RAIZ)
+
+
 # --------------------------------------------------------------------------- #
 # Las tablas activas — qué se está pasando al calendario ahora mismo
 # --------------------------------------------------------------------------- #
@@ -415,6 +427,25 @@ def barra_lateral(con_horario: bool, dibujar_google: bool = True) -> dict:
                 value=True,
                 help="Excel deja huecos debajo de una celda combinada; esto los completa.",
             )
+
+            # El interruptor sólo existe si hay clave configurada: sin ella no
+            # hay nada que apagar. `value` sólo la primera vez, o Streamlit
+            # avisa de que el valor se fija por dos vías.
+            cfg_ia = config_ia()
+            if cfg_ia:
+                inicial = {} if "usar_ia" in st.session_state else {"value": True}
+                st.checkbox(
+                    "Leer los PDF con inteligencia artificial",
+                    key="usar_ia",
+                    help=f"Un modelo de OpenAI ({cfg_ia['model']}) extrae las "
+                         "tablas y resume cada actividad. Apagado, trabaja el "
+                         "lector clásico, que no envía el PDF a ningún servicio.",
+                    **inicial,
+                )
+                usos = st.session_state.get("usos_ia", {})
+                if usos:
+                    gasto = sum(u.costo_usd or 0.0 for u in usos.values())
+                    st.caption(f"IA en esta sesión: {len(usos)} PDF · ${gasto:.4f} USD")
 
         if dibujar_google:
             st.divider()
@@ -848,6 +879,49 @@ def _tablas_del_pdf(datos: bytes, anio: int) -> list[planpdf.Candidata]:
     return planpdf.extraer(datos, anio_defecto=anio)
 
 
+@st.cache_data(show_spinner=False, max_entries=4)
+def _tablas_del_pdf_ia(datos: bytes, anio: int, clave: str, modelo: str) -> ia.ResultadoIA:
+    """Una llamada al modelo por archivo, y ni una más: cada una cuesta dinero.
+
+    El caché es lo que la garantiza: Streamlit reejecuta la página entera a cada
+    clic, y sin él cada marca de una casilla volvería a pagar la extracción.
+    """
+    texto = planpdf.texto_completo(datos)
+    return ia.extraer(texto, clave_api=clave, modelo=modelo, anio_defecto=anio)
+
+
+def _leer_pdf_con_ia(datos: bytes, cfg: dict) -> list[planpdf.Candidata] | None:
+    """Intenta la lectura con IA; None significa «que lo haga el lector clásico».
+
+    Un fallo se recuerda por archivo (`ia_fallo_<firma>`) y no se reintenta:
+    reintentar en cada reejecución sería pagar la llamada una y otra vez contra
+    el mismo error. El lector clásico toma el relevo, y si el PDF está dañado o
+    escaneado será él quien dé el diagnóstico definitivo.
+    """
+    firma_archivo = st.session_state.firma_archivo
+    if st.session_state.get(f"ia_fallo_{firma_archivo}"):
+        return None
+    try:
+        with st.spinner(f"Leyendo el PDF con IA ({cfg['model']})…"):
+            resultado = _tablas_del_pdf_ia(datos, ANIO_ACTUAL, cfg["api_key"], cfg["model"])
+    except (ia.ErrorDeIA, planpdf.ErrorDePDF) as e:
+        st.session_state[f"ia_fallo_{firma_archivo}"] = True
+        st.warning(
+            f"No pude leer el PDF con IA y usé el lector clásico. Detalle: {e}",
+            icon="🤖",
+        )
+        return None
+
+    # El gasto se apunta aunque el modelo no haya encontrado nada: ya se pagó.
+    # Por archivo y no acumulando a ciegas, porque el caché hace que el mismo
+    # PDF no vuelva a costar y no debe volver a sumar.
+    st.session_state.setdefault("usos_ia", {})[firma_archivo] = resultado.uso
+    if not resultado.candidatas:
+        st.session_state[f"ia_fallo_{firma_archivo}"] = True
+        return None
+    return resultado.candidatas
+
+
 def sugerir_materia(nombre: str) -> None:
     """Rellena el nombre de la materia con el que trae el plan de trabajo.
 
@@ -890,12 +964,26 @@ def paso_lectura_pdf(datos: bytes, nombre_archivo: str) -> list[TablaActiva]:
         )
         return []
 
-    try:
-        with st.spinner("Buscando las tablas del PDF…"):
-            candidatas = _tablas_del_pdf(datos, ANIO_ACTUAL)
-    except planpdf.ErrorDePDF as e:
-        st.error(str(e))
-        return []
+    # La IA primero, si está configurada y el usuario no la apagó. El valor de
+    # `usar_ia` lo escribe un checkbox de la barra lateral que se dibuja después
+    # de este paso; leerlo de la sesión trae el del ciclo anterior, y el propio
+    # cambio del checkbox reejecuta la página, así que siempre converge.
+    candidatas = None
+    cfg_ia = config_ia() if st.session_state.get("usar_ia", True) else None
+    if cfg_ia:
+        candidatas = _leer_pdf_con_ia(datos, cfg_ia)
+    # Si la IA cobró pero no sirvió (falló o no encontró nada), las tablas que
+    # se enseñan abajo son del lector clásico y la nota de costo no debe
+    # atribuírselas al modelo.
+    leidas_con_ia = candidatas is not None
+
+    if candidatas is None:
+        try:
+            with st.spinner("Buscando las tablas del PDF…"):
+                candidatas = _tablas_del_pdf(datos, ANIO_ACTUAL)
+        except planpdf.ErrorDePDF as e:
+            st.error(str(e))
+            return []
 
     if not candidatas:
         st.error(
@@ -905,6 +993,12 @@ def paso_lectura_pdf(datos: bytes, nombre_archivo: str) -> list[TablaActiva]:
             icon="⚠️",
         )
         return []
+
+    # La nota del costo va aquí y no junto al éxito del final: se muestra aunque
+    # el usuario desmarque todo, porque los tokens ya se gastaron igual.
+    uso_ia = st.session_state.get("usos_ia", {}).get(st.session_state.firma_archivo)
+    if leidas_con_ia and uso_ia is not None:
+        st.caption(f"🤖 Tablas extraídas y resumidas por IA ({uso_ia.modelo}) · {uso_ia.resumen()}")
 
     # Una casilla por tabla y no un `st.radio`: el plan trae las actividades y
     # las videoconferencias en tablas distintas y casi siempre se quieren las
@@ -1759,9 +1853,19 @@ Vuelve a importar el mismo `.ics`: Google reconoce los eventos y los actualiza e
 lugar de duplicarlos. Si usas el envío directo, deja marcada la casilla
 «No duplicar eventos que ya existan».
 
+**¿La app usa inteligencia artificial?**
+Sólo para leer el PDF, y sólo si quien publica la app configuró una clave de
+OpenAI: un modelo GPT encuentra las tablas —venga el plan en el formato que
+venga— y **resume la descripción de cada actividad** en un par de frases.
+Sin clave, o apagándolo en «Ajustes avanzados», trabaja el lector clásico, que
+no envía nada a ningún servicio.
+
 **¿Se guarda mi información?**
 No. El archivo se procesa en memoria mientras usas la página y no se almacena.
-El permiso de Google sólo se usa para crear los eventos que confirmes.
+El permiso de Google sólo se usa para crear los eventos que confirmes. Si esta
+instalación tiene la lectura con IA activada, el texto del PDF se envía a la API
+de OpenAI para extraer las tablas; la API no lo usa para entrenar modelos y la
+app no lo guarda.
             """
         )
 

@@ -21,7 +21,11 @@ Subes el plan **en PDF, CSV o Excel** y la app:
 - **Lee el PDF tal cual te lo dieron**: busca dentro sus tablas, junta las que
   cruzan varias páginas y te enseña las que encontró («📝 Actividades — 14
   filas, págs. 6–24») **con una casilla cada una, para que marques las que
-  quieras**: actividades y videoconferencias en un solo viaje. Si el plan trae
+  quieras**: actividades y videoconferencias en un solo viaje. Si quien publica
+  la app configuró una clave de OpenAI, el PDF lo lee **un modelo GPT** —aguanta
+  formatos de plan que el lector clásico no conoce y **resume la descripción de
+  cada actividad** en un par de frases—; sin clave trabaja el lector clásico de
+  siempre, gratuito y sin enviar nada a ningún servicio. Si el plan trae
   una tabla de videoconferencias por grupo, te las ofrece todas **con el nombre
   del asesor**, que es lo que de verdad te dice cuál es la tuya, y no marca
   ninguna hasta que elijas.
