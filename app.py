@@ -1070,13 +1070,17 @@ def corrector_de_tipo(tabla: TablaActiva) -> None:
 
     En el PDF el tipo lo dice la propia tabla y no se pregunta en el paso 1, así
     que si `pdf.py` la clasificó mal —o si el plan trae una tabla rara— éste es
-    el único sitio donde el usuario puede desmentirlo. Va fuera del desplegable
-    de abajo: quien lo necesita es porque toda la pantalla le está hablando del
-    tipo equivocado, y esconderlo sería dejarlo sin salida.
+    el único sitio donde el usuario puede desmentirlo.
+
+    Va **dentro** del desplegable de configuración manual, y de primero. Fuera se
+    leía como si la app volviera a preguntar lo mismo que el paso 1, donde el
+    usuario ya marcó esta tabla; ahí dentro está entre sus iguales, porque el
+    paso 2 entero es «ábreme sólo si algo salió mal» y esto es exactamente eso.
 
     No hace falta aplicar el cambio a mano: tocar el widget reejecuta la página,
     y el paso 1 vuelve a construir la tabla leyendo esta misma clave (`modo_de`).
     """
+    st.caption("Si esta tabla no es lo que parece, cámbiale el tipo aquí:")
     clave = f"tipo_{tabla.clave}"
     inicial = ({} if clave in st.session_state
                else {"index": list(TIPOS).index(tabla.tipo_propuesto)})
@@ -1137,9 +1141,6 @@ def config_de_tabla(tabla: TablaActiva, dayfirst: bool,
     modo = tabla.modo
     principales, opcionales = deteccion.campos_de(modo)
 
-    if tabla.tipo_propuesto:
-        corrector_de_tipo(tabla)
-
     # El modo entra en la clave porque cambia qué campos se piden, y el número
     # de columnas porque corregir la fila de títulos cambia la tabla entera.
     clave = firma(tabla.clave, modo, len(df.columns))
@@ -1171,6 +1172,12 @@ def config_de_tabla(tabla: TablaActiva, dayfirst: bool,
         "Ábreme sólo si algo quedó mal."
     )
     with st.expander(resumen, expanded=falta_fecha):
+        # De primero, porque es lo que hay que corregir antes que nada: si el
+        # tipo está mal, los campos de abajo son los del otro tipo de evento.
+        if tabla.tipo_propuesto:
+            corrector_de_tipo(tabla)
+            st.divider()
+
         for campo, col in zip(principales, st.columns(len(principales))):
             mapeo[campo] = selector(campo, col)
         for campo, col in zip(opcionales, st.columns(len(opcionales))):
@@ -1218,7 +1225,7 @@ def config_de_tabla(tabla: TablaActiva, dayfirst: bool,
     # aconsejaba justo lo contrario de lo correcto.
     if (modo == MODO_HORA and not mapeo["hora"]
             and not deteccion.hay_horarios(df, mapeo["fecha"])):
-        donde = ("aquí arriba" if tabla.tipo_propuesto
+        donde = ("en el desplegable de aquí arriba" if tabla.tipo_propuesto
                  else "en el paso 1")
         st.warning(
             "Esta tabla no parece traer horarios. Si son entregas, cambia su tipo "
