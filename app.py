@@ -270,6 +270,16 @@ def reiniciar_sesion() -> None:
     st.session_state.update(conservado)
     arrancar_estado()
     st.session_state.ronda_subida = ronda
+    # Y el nombre de la materia hay que **asignarlo**, no basta con borrarlo.
+    # Borrar la clave de un widget no le dice nada al navegador: el proto sólo
+    # lleva `set_value` cuando la clave se asignó en ese mismo ciclo, así que el
+    # `text_input` se queda enseñando el nombre anterior y lo reenvía en la
+    # siguiente interacción —la que sube el plan siguiente—, resucitando la
+    # clave recién borrada. Con la materia vieja de vuelta, `sugerir_materia` no
+    # propone la del plan nuevo (sólo lo hace con el campo vacío) y el
+    # calendario salía con el nombre de la materia anterior. Es el mismo mal que
+    # obliga a darle una clave nueva al `file_uploader` (`ronda_subida`).
+    st.session_state.materia = ""
 
 
 def url_base() -> str:
@@ -2015,10 +2025,10 @@ def seccion_donacion() -> None:
         if imagen.exists():
             st.image(str(imagen), width=350)
     with der:
-        st.markdown("#### Apoyar el proyecto")
+        st.markdown("#### ¡Apoya el proyecto!")
         st.markdown(
             "Con 1 USD se pagan unas 130 lecturas de planes con inteligencia "
-            "artificial: el semestre completo de unos 18 estudiantes, a siete "
+            "artificial: el semestre completo de unos 18 estudiantes, siete "
             "materias cada uno. Cualquier aporte mantiene la app gratuita para "
             "toda la comunidad."
         )
