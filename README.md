@@ -38,9 +38,9 @@ Subes el plan **en PDF, CSV o Excel** y la app:
 - **Sabe si tu CSV o tu Excel son entregas o sesiones**: si la tabla trae
   horarios de verdad propone videoconferencias, y si no, actividades. Se corrige
   con un clic.
-- **Junta varios archivos**: si las actividades y las videoconferencias vienen
-  en archivos distintos, «Añadir otro archivo» guarda lo que llevas y te deja
-  subir el siguiente.
+- **Agrupa las tablas del PDF por tipo**: primero las actividades y, debajo,
+  bajo *«Elegir el grupo que corresponda»*, las videoconferencias de cada grupo,
+  para que marques la de tu asesor y ninguna más.
 - **Saca sola el nombre de la materia** del propio plan y lo pone en los
   eventos; si no acierta, lo cambias en un campo.
 - **Encuentra sola dónde empieza la tabla**, aunque arriba haya logos, títulos o
@@ -56,8 +56,8 @@ Subes el plan **en PDF, CSV o Excel** y la app:
 - **Rellena las celdas combinadas** de la columna *Unidad*.
 - Te deja **revisar y corregir todo** en una tabla editable antes de exportar, en
   el mismo paso donde se ajusta qué columna es cuál.
-- **«Empezar de nuevo»** limpia todo para la siguiente materia sin desconectarte
-  de Google.
+- **«Agregar otro calendario»** limpia todo para la siguiente materia sin
+  desconectarte de Google: es el camino para pasar dos planes seguidos.
 
 Y luego, a elegir según lo que tengas a la mano:
 

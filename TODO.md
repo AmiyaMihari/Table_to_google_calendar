@@ -215,8 +215,9 @@ Vigilar el contador en **Google Auth Platform → Público**.
 
 - **Varias hojas de un mismo Excel.** De un PDF se marcan varias tablas de golpe,
   pero de un Excel sólo se trabaja una hoja a la vez: para la segunda hay que
-  pasar por «➕ Añadir otro archivo» y volver a subirlo. Poco frecuente; ver si
-  molesta.
+  exportar, pulsar «Agregar otro calendario» y volver a subir el archivo (el
+  botón «Añadir otro archivo», que las juntaba en una sola exportación, se
+  quitó). Poco frecuente; ver si molesta.
 - **Aviso de app dormida.** Las apps gratuitas se duermen sin visitas y la
   primera persona ve «This app has gone to sleep». Está avisado en el
   instructivo, pero conviene repetirlo al compartir la liga.

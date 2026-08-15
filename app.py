@@ -133,6 +133,24 @@ def estilos() -> None:
           /* El botón puente sólo existe para que ese mismo script pueda
              pulsarlo y avisar al servidor; al usuario no le dice nada. */
           .st-key-oauth_espera { display: none; }
+          /* «Agregar otro calendario» en naranja, y sólo ése: la regla cuelga de
+             la clave de su botón (`.st-key-<clave>`), así que ningún otro
+             `type="primary"` —el de descargar el .ics, el de crear los eventos—
+             se pinta de este color. El naranja es el oscuro (#C2410C) y no uno
+             más vivo porque el texto va en blanco: con #EA580C el contraste se
+             queda en 3.6:1 y no llega al mínimo legible. */
+          .st-key-agregar_calendario button {
+            background-color: #C2410C !important; border-color: #C2410C !important;
+            color: #fff !important;
+          }
+          .st-key-agregar_calendario button:hover {
+            background-color: #9A3412 !important; border-color: #9A3412 !important;
+          }
+          .st-key-agregar_calendario button:active,
+          .st-key-agregar_calendario button:focus:not(:active) {
+            background-color: #7C2D12 !important; border-color: #7C2D12 !important;
+            box-shadow: none !important;
+          }
           /* Streamlit escribe «Press Enter to apply» y no es configurable;
              se oculta y se sustituye por la versión en español. */
           div[data-testid="InputInstructions"] { visibility: hidden; position: relative; }
@@ -188,9 +206,12 @@ def pie_lateral() -> None:
 # --------------------------------------------------------------------------- #
 
 def arrancar_estado() -> None:
-    # `guardados` son los eventos de tablas anteriores; los de la tabla que está
-    # abierta ahora se calculan al vuelo y se suman al exportar. Así no hay que
-    # pulsar ningún botón de «confirmar» para que cuenten.
+    # `guardados` son eventos que ya no cuelgan de ninguna tabla abierta y aun
+    # así hay que exportar. Desde que se quitó «Añadir otro archivo» los llena un
+    # solo sitio: `procesar_regreso_oauth`, que devuelve lo que la sesión llevaba
+    # al salir a Google (la emergente es otra sesión y empieza en blanco). Los de
+    # las tablas abiertas se calculan al vuelo y se suman al exportar, así que no
+    # hay ningún botón de «confirmar» que pulsar.
     st.session_state.setdefault("guardados", [])
     st.session_state.setdefault("archivo", None)
     # Cambiar este número le da una clave nueva al file_uploader, que es la
@@ -224,9 +245,9 @@ def firma_de_archivo(datos: bytes, nombre: str) -> str:
     return firma(nombre, len(datos), hashlib.md5(datos).hexdigest())
 
 
-# Lo único que sobrevive a «Empezar de nuevo»: volver a pasar por Google cuesta
-# salir de la página, aceptar permisos y volver, y es justo lo que se quiere
-# evitar cuando sólo se va a cargar el plan de otra materia.
+# Lo único que sobrevive a «Agregar otro calendario»: volver a pasar por Google
+# cuesta salir de la página, aceptar permisos y volver, y es justo lo que se
+# quiere evitar cuando sólo se va a cargar el plan de otra materia.
 CLAVES_QUE_SOBREVIVEN = ("credenciales", "correo_google")
 
 
@@ -671,8 +692,16 @@ SCRIPT_BOTON_GOOGLE = """
 """
 
 
-def boton_empezar_de_nuevo() -> None:
+def boton_agregar_calendario() -> None:
     """Reinicio rápido, al principio de la barra lateral.
+
+    Se llamó «Empezar de nuevo» y ahora dice **«Agregar otro calendario»**: la
+    mecánica es la misma —`reiniciar_sesion` deja la app como recién abierta sin
+    soltar la sesión de Google— pero el nombre viejo describía lo que se borra y
+    no para qué se borra, que es pasar el plan de la siguiente materia. Va en
+    naranja (`type="primary"` más la regla `.st-key-agregar_calendario` de
+    `estilos()`) porque es lo que se busca al terminar con una materia y en gris
+    no se encontraba.
 
     Sólo se dibuja cuando hay algo que reiniciar: en la primera visita no hace
     falta y quitaría protagonismo a «Conectar con Google», que ahí es lo que
@@ -682,7 +711,9 @@ def boton_empezar_de_nuevo() -> None:
     if st.session_state.archivo is None and not st.session_state.guardados:
         return
     if st.button(
-        "Empezar de nuevo",
+        "Agregar otro calendario",
+        key="agregar_calendario",
+        type="primary",
         width="stretch",
         help="Borra el archivo, los eventos y el nombre de la materia para "
              "empezar con otra. No cierra la sesión de Google.",
@@ -691,7 +722,8 @@ def boton_empezar_de_nuevo() -> None:
         # `reiniciar_sesion` borra sus claves.
         st.session_state.reiniciar_pendiente = True
         st.rerun()
-    st.caption("Otra materia, sin volver a conectar Google.")
+    st.caption("Vacía el plan actual para pasar otra materia, sin volver a "
+               "conectar Google.")
     st.divider()
 
 
@@ -947,10 +979,11 @@ def paso_archivo() -> tuple[bytes, str] | None:
     # antes de subir nada.
     paso(1, "Subir el archivo", "el plan de trabajo en PDF, o la tabla en CSV o Excel")
 
-    # Sin archivo y con eventos en el bolsillo sólo se llega por «Añadir otro
-    # archivo» o al volver de Google, y en los dos casos lo que hace falta saber
-    # es que lo anterior no se perdió. Sale de `guardados`, sin ninguna clave de
-    # aviso: el propio estado lo dice todo.
+    # Sin archivo y con eventos en el bolsillo sólo se llega al volver de Google
+    # —la ventana emergente es otra sesión y `procesar_regreso_oauth` le
+    # devuelve lo que había—, y lo que hace falta saber ahí es que lo anterior no
+    # se perdió. Sale de `guardados`, sin ninguna clave de aviso: el propio
+    # estado lo dice todo.
     if st.session_state.archivo is None and st.session_state.guardados:
         st.success(
             f"Hay **{len(st.session_state.guardados)} eventos** guardados. Al subir "
@@ -985,45 +1018,15 @@ def paso_archivo() -> tuple[bytes, str] | None:
     if subido is None:
         izq, der = st.columns([3, 2])
         izq.caption(f"Archivo abierto: **{archivo[1]}**")
-        # El «Añadir otro archivo» de más abajo vacía el mismo recuadro pero
-        # conservando los eventos, así que aquí hay que decir en qué se
-        # diferencian o se pulsa el que no era.
         if der.button(
             "Quitar archivo",
             width="stretch",
-            help="Descarta este archivo y los eventos de su tabla. Para subir "
-                 "otro **sin perderlos**, usar «Añadir otro archivo».",
+            help="Descarta este archivo y los eventos de su tabla. El resto de "
+                 "los ajustes se conservan.",
         ):
             olvidar_archivo()
             st.rerun()
     return archivo
-
-
-def boton_otro_archivo(actuales: list[Evento]) -> None:
-    """Cierra el paso 1 ofreciendo cargar otro archivo sin perder lo hecho.
-
-    Es el caso de quien trae las actividades y las videoconferencias en archivos
-    distintos: dentro de un PDF las dos tablas se marcan a la vez, pero con CSV
-    hay que subirlas una por una. Mueve lo que hay en los editores a `guardados`
-    y libera el `file_uploader`; el archivo nuevo propondrá su propio tipo.
-
-    Se dibuja al final del ciclo aunque su hueco esté arriba: cuántos eventos hay
-    no se sabe hasta el paso 2.
-    """
-    if not actuales:
-        return
-    total = len(st.session_state.guardados) + len(actuales)
-    if st.button(
-        f"Añadir otro archivo (se conservan los {total} eventos actuales)",
-        type="tertiary",
-        help="Guarda los eventos actuales y vacía el recuadro de arriba para "
-             "subir la otra tabla. Al final se exportan todas juntas.",
-    ):
-        st.session_state.guardados = st.session_state.guardados + actuales
-        # Vaciar el widget es imprescindible: si no, vuelve a cargar el mismo
-        # archivo y sus eventos se sumarían dos veces.
-        olvidar_archivo()
-        st.rerun()
 
 
 @st.cache_data(show_spinner=False, max_entries=4)
@@ -1182,27 +1185,49 @@ def paso_lectura_pdf(datos: bytes, nombre_archivo: str) -> list[TablaActiva]:
     # las videoconferencias en tablas distintas y casi siempre se quieren las
     # dos. Se dibuja aunque sólo haya una candidata, porque marcarla y
     # desmarcarla es también la forma de decir «ésta no es».
+    # «Se exportan juntas al final» va aquí arriba y ya no de pie de la lista:
+    # con el encabezado de grupos en medio, un `caption` al final parecía hablar
+    # sólo de las videoconferencias.
     st.markdown(
         "**Tablas encontradas en el PDF.** Marcar las que se van a exportar; "
-        "pueden ser varias."
+        "pueden ser varias y se exportan juntas al final."
     )
+    preseleccion = _preseleccion(candidatas)
     marcadas: list[tuple[int, str]] = []
-    for i, (candidata, marcada) in enumerate(zip(candidatas, _preseleccion(candidatas))):
+
+    def casilla(i: int) -> None:
         # La clave lleva la firma del archivo y el lector: al cambiar de PDF —o
         # de lector— Streamlit poda las de antes y la preselección se vuelve a
-        # calcular con las nuevas.
+        # calcular con las nuevas. Lleva también el índice **en la lista
+        # original**, así que agrupar las casillas por tipo no le cambia la
+        # identidad a ninguna tabla ni le pasa la marca a otra.
         clave_marca = f"tabla_pdf_{st.session_state.firma_archivo}_{lector}_{i}"
         clave = firma(st.session_state.firma_archivo, "pdf", lector, i)
         # `value` sólo la primera vez, o Streamlit avisa de que el valor se está
         # fijando por dos vías.
-        inicial = {} if clave_marca in st.session_state else {"value": marcada}
+        inicial = ({} if clave_marca in st.session_state
+                   else {"value": preseleccion[i]})
         # Sin nada a la derecha: el tipo de cada tabla lo dice su propio nombre
         # («Actividades — …», «Videoconferencias · grupo 8596 · …») y un control
         # aparte repetía a la derecha lo que ya se lee a la izquierda.
-        elegida = st.checkbox(_etiqueta_candidata(candidata), key=clave_marca, **inicial)
-        if elegida:
+        if st.checkbox(_etiqueta_candidata(candidatas[i]), key=clave_marca, **inicial):
             marcadas.append((i, clave))
-    st.caption("Se exportan juntas al final.")
+
+    # Las casillas van agrupadas por tipo —primero las entregas, después las
+    # sesiones— aunque en el PDF salgan intercaladas: lo que hay que decidir en
+    # el segundo grupo no es si interesan las videoconferencias, sino **cuál de
+    # los grupos es el propio**, y esa pregunta necesita su encabezado. Sin él,
+    # tres o cuatro casillas casi idénticas parecen opciones repetidas.
+    entregas = [i for i, c in enumerate(candidatas)
+                if c.tipo == planpdf.TIPO_ACTIVIDADES]
+    sesiones = [i for i, c in enumerate(candidatas)
+                if c.tipo != planpdf.TIPO_ACTIVIDADES]
+    for i in entregas:
+        casilla(i)
+    if sesiones:
+        st.markdown("**Elegir el grupo que corresponda (opcional):**")
+        for i in sesiones:
+            casilla(i)
 
     # La materia es dato del documento, no de la tabla: da igual cuál se marque.
     sugerir_materia(candidatas[0].materia)
@@ -1215,18 +1240,10 @@ def paso_lectura_pdf(datos: bytes, nombre_archivo: str) -> list[TablaActiva]:
         for aviso in candidatas[i].avisos:
             st.warning(f"{candidatas[i].nombre}: {aviso}")
 
-    if len(marcadas) == 1:
-        elegida = candidatas[marcadas[0][0]]
-        st.success(
-            f"Se leyeron **{len(elegida.df)} filas** de «{elegida.nombre}» "
-            f"({_rango(elegida.paginas)} del PDF)."
-        )
-    else:
-        detalle = " + ".join(
-            f"{len(candidatas[i].df)} de «{candidatas[i].nombre}»" for i, _ in marcadas
-        )
-        total = sum(len(candidatas[i].df) for i, _ in marcadas)
-        st.success(f"Se leyeron **{total} filas** en total: {detalle}.")
+    # Aquí hubo un `st.success` con las filas que se leyeron de cada tabla
+    # marcada y **se quitó**: la casilla que se acaba de marcar ya dice ese
+    # mismo número y esas mismas páginas, así que el aviso verde no añadía nada
+    # y empujaba las tablas hacia arriba, fuera de la vista.
 
     activas = []
     for i, clave in marcadas:
@@ -1304,10 +1321,12 @@ def paso_lectura(datos: bytes, nombre: str) -> list[TablaActiva]:
         st.error(str(e))
         return []
 
-    st.success(
-        f"Tabla leída: **{len(lectura.df)} filas** y **{len(lectura.df.columns)} columnas**"
-        + (f" de la hoja «{lectura.hoja}»" if lectura.hoja else "")
-    )
+    # Aquí hubo un `st.success` («Tabla leída: 12 filas y 4 columnas») y se quitó
+    # junto con el del PDF: el mismo recuento sale dos veces más abajo —en el
+    # subtítulo del paso 2 y en el `caption` que encabeza el editor— y las
+    # columnas las cuenta el desplegable del mapeo («Se detectaron 6 de 6»). Lo
+    # que aquí sí hace falta es la pregunta por el tipo, y un aviso verde encima
+    # se la comía.
     # La pregunta va aquí, con la tabla ya leída, porque es lo que permite
     # proponer la respuesta; y después del selector de hoja, porque cada hoja del
     # Excel puede ser de un tipo distinto.
@@ -1364,7 +1383,8 @@ def paso_revisar(activas: list[TablaActiva], ajustes: dict) -> list[Evento]:
     """
     # El encabezado dice cuántos eventos hay, y eso no se sabe hasta haberlos
     # construido: se le reserva el hueco y se rellena al final del paso (el
-    # patrón de «Empezar de nuevo»).
+    # patrón de «Agregar otro calendario»). La nota de responsabilidad va en ese
+    # mismo hueco, justo debajo del encabezado y encima de las pestañas.
     cabecera = st.container()
 
     sitios = ([st.container()] if len(activas) == 1
@@ -1395,6 +1415,16 @@ def paso_revisar(activas: list[TablaActiva], ajustes: dict) -> list[Evento]:
         paso(2, "Revisar y ajustar",
              f"{listos} eventos listos"
              + (f", {con_problema} por revisar" if con_problema else ""))
+        # El único emoji de la interfaz además del favicon, y va aquí a
+        # propósito: es la nota de responsabilidad, lo que separa «la app leyó el
+        # plan» de «el plan está bien leído», y sin el triángulo se lee como un
+        # aviso más de los muchos que puede haber en este paso.
+        st.warning(
+            "Verificar que no falte ninguna actividad ni sesión: la lectura "
+            "automática puede fallar y la revisión final corre por cuenta de "
+            "quien exporta.",
+            icon="⚠️",
+        )
     return salida
 
 
@@ -1684,7 +1714,7 @@ def editor_de_tabla(tabla: TablaActiva, eventos: list[Evento],
 # --------------------------------------------------------------------------- #
 
 def paso_exportar(ajustes: dict, actuales: list[Evento]) -> None:
-    """Todo junto: lo guardado de archivos anteriores y las tablas abiertas.
+    """Todo junto: lo que quedó guardado y las tablas abiertas.
 
     `actuales` ya viene siendo la unión de todas las tablas activas, así que
     aquí no queda ninguna decisión de qué incluir: lo que se ve en el paso 2 se
@@ -1692,8 +1722,9 @@ def paso_exportar(ajustes: dict, actuales: list[Evento]) -> None:
 
     Aquí no se repite la lista de eventos: está completa y editable un paso más
     arriba, y volver a enseñarla hacía dudar de si había que revisarla otra vez.
-    Basta con el recuento por tabla. La excepción son los eventos de archivos
-    anteriores, que no salen en ninguna pestaña abierta y de otro modo quedarían
+    Basta con el recuento por tabla. La excepción son los de `guardados` —los
+    que la sesión traía antes de salir a Google, que `procesar_regreso_oauth`
+    devuelve—: no salen en ninguna pestaña abierta y de otro modo quedarían
     invisibles.
     """
     eventos: list[Evento] = st.session_state.guardados + actuales
@@ -1725,7 +1756,7 @@ def paso_exportar(ajustes: dict, actuales: list[Evento]) -> None:
 
     guardados = st.session_state.guardados
     if guardados:
-        with st.expander(f"Ver los {len(guardados)} eventos de archivos anteriores"):
+        with st.expander(f"Ver los {len(guardados)} eventos ya guardados"):
             st.dataframe(
                 pd.DataFrame([{
                     "Título": ev.titulo,
@@ -1965,8 +1996,8 @@ def main() -> None:
     if restaurados:
         st.success(f"Conexión lista. Los {restaurados} eventos siguen aquí.")
 
-    # «Empezar de nuevo» y «Conectar con Google» van arriba de todo en la barra
-    # lateral, pero se dibujan al final: el primero necesita saber si hay
+    # «Agregar otro calendario» y «Conectar con Google» van arriba de todo en la
+    # barra lateral, pero se dibujan al final: el primero necesita saber si hay
     # archivo abierto (lo carga `paso_archivo`, más abajo) y el segundo, qué
     # eventos preservar durante el viaje a Google. Se reservan los huecos ahora
     # y se rellenan después.
@@ -1976,13 +2007,8 @@ def main() -> None:
 
     archivo = paso_archivo()
     activas: list[TablaActiva] = []
-    hueco_otro_archivo = None
     if archivo is not None:
         activas = paso_lectura(*archivo)
-        # «Añadir otro archivo» cierra el paso 1, pero no puede dibujarse aún:
-        # cuántos eventos hay no se sabe hasta el paso 2. Se le reserva el hueco
-        # y se rellena al final del ciclo.
-        hueco_otro_archivo = st.container()
 
     # La barra lateral va después del paso 1 porque necesita saber si alguna de
     # las tablas abiertas trae horario; y antes del paso 2, que usa su `dayfirst`
@@ -1998,12 +2024,8 @@ def main() -> None:
 
     paso_exportar(ajustes, actuales)
 
-    if hueco_otro_archivo is not None:
-        with hueco_otro_archivo:
-            boton_otro_archivo(actuales)
-
     with contenedor_reinicio:
-        boton_empezar_de_nuevo()
+        boton_agregar_calendario()
     with contenedor_google:
         panel_google(actuales)
         st.divider()
@@ -2021,30 +2043,23 @@ No. Todo lo que aparece en el paso 2 ya cuenta; en el paso 3 sólo se elige cóm
 mandarlo al calendario.
 
 **Las actividades y las videoconferencias están en tablas separadas.**
-Si las dos vienen dentro del mismo PDF, se marcan juntas en el paso 1. Si están
-en archivos distintos, subir el primero y pulsar **«Añadir otro archivo»** al
-final del paso 1: se guardan los eventos actuales y queda libre el recuadro para
-el siguiente. Al final se exportan juntas.
+Si las dos vienen dentro del mismo PDF, se marcan juntas en el paso 1 y se
+exportan de una vez. Si están en archivos distintos, se exporta el primero y
+después, con **«Agregar otro calendario»**, se sube el segundo.
 
 **Empezar de cero.**
 En el paso 3, **«Quitar todos los eventos»**; en la barra lateral,
-**«Empezar de nuevo»** borra además el nombre de la materia.
-
-**¿En qué se diferencian «Quitar archivo» y «Añadir otro archivo»?**
-Los dos vacían el recuadro del paso 1, pero **«Quitar archivo» descarta** los
-eventos de la tabla abierta —es el botón para cuando el archivo subido no era el
-correcto— y **«Añadir otro archivo» los conserva**, que es el que corresponde
-para sumar una segunda tabla. Lo guardado de archivos anteriores no lo toca
-ninguno de los dos.
+**«Agregar otro calendario»** borra además el nombre de la materia.
 
 **¿Se puede subir el plan de trabajo en PDF, sin tocarlo?**
 Sí, es lo más rápido. La app busca dentro sus tablas y las muestra con una
 casilla cada una. También acepta la tabla ya pasada a CSV o Excel.
 
 **Aparecen varias tablas de videoconferencias.**
-El plan trae un grupo por asesor, así que no viene marcada ninguna: hay que
-elegir la del asesor propio, que aparece con su nombre al lado del número de
-grupo.
+El plan trae un grupo por asesor, así que no viene marcada ninguna: van juntas
+bajo **«Elegir el grupo que corresponda»** y hay que marcar la del asesor
+propio, que aparece con su nombre al lado del número de grupo. Marcar sólo las
+actividades y ninguna de ellas también es una respuesta válida.
 
 **Una tabla quedó del tipo equivocado.**
 En un CSV o un Excel, el tipo se cambia en el paso 1, con el selector que sale al

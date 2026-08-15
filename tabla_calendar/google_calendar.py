@@ -481,8 +481,9 @@ def insertar_eventos(
                     body=_cuerpo(ev, zona, duracion_horas, recordatorio_min),
                 ).execute()
                 creados += 1
-                # El lote también puede traer repetidos —el mismo archivo
-                # subido dos veces con «Añadir otro archivo» en medio—, y
+                # El lote también puede traer repetidos —dos tablas del mismo
+                # plan con una actividad en común, o lo que devolvió el viaje a
+                # Google sumado a lo que quedó en los editores—, y
                 # `ya_estan` se leyó del calendario antes de empezar: sin
                 # apuntar aquí lo que se acaba de crear, el segundo no
                 # encontraría rastro del primero y se insertaría igual.

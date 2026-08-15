@@ -56,10 +56,11 @@ y tampoco tienes que pensarla mucho: **viene contestada** y casi siempre acierta
   archivo dos veces.
   - Las **actividades** vienen marcadas de entrada: son las mismas para todos
     los grupos y es a lo que viene casi todo el mundo.
-  - Las **videoconferencias** vienen **desmarcadas**, siempre. A las sesiones en
-    vivo va quien va, así que las marcas tú. Si tu plan trae una tabla por
-    grupo, **elige la de tu asesor**, que aparece con su nombre al lado del
-    número de grupo.
+  - Las **videoconferencias** van todas juntas más abajo, bajo el letrero
+    **«Elegir el grupo que corresponda (opcional):»**, y vienen **desmarcadas**,
+    siempre. A las sesiones en vivo va quien va, así que las marcas tú. Si tu
+    plan trae una tabla por grupo, **elige la de tu asesor**, que aparece con su
+    nombre al lado del número de grupo; si no vas a ninguna, déjalas como están.
   - Si la app te avisa de que los **años** de tu plan no cuadran, repásalos
     antes de exportar: alguna tabla puede haber quedado con el año equivocado.
   - El **horario de dudas de tu asesor** («martes y jueves de 14:00 a 16:00») no
@@ -71,15 +72,15 @@ y tampoco tienes que pensarla mucho: **viene contestada** y casi siempre acierta
   hojas, elige primero la hoja —cada una puede ser de un tipo distinto— y la
   propuesta se recalcula.
 
-Verás un mensaje verde: *«Tabla leída: 12 filas y 4 columnas»*, o *«Se leyeron 18
-filas en total»* si marcaste varias. Si el número de filas se ve raro, lo
-arreglas en el paso 2.
+Cuántas filas leyó cada tabla te lo dice su propia casilla («Actividades — 14
+filas, páginas 6 a 24»), y el paso 2 lo repite arriba del todo. Si el número se
+ve raro, lo arreglas ahí.
 
-> 💡 **¿Tienes las dos cosas en archivos distintos?** Sube el primero y, al final
-> del paso 1, pulsa **«Añadir otro archivo»**: te dice cuántos eventos llevas,
-> los guarda y te deja el recuadro libre para el siguiente. **Al final se
-> exportan todos juntos.** (Si las dos tablas venían en el mismo PDF, esto no
-> hace falta: márcalas juntas y ya.)
+> 💡 **¿Tienes las dos cosas en archivos distintos?** Si las dos tablas venían en
+> el mismo PDF no tienes que hacer nada: márcalas juntas y se exportan de una
+> vez. Y si de verdad son dos archivos, exporta el primero y luego pulsa
+> **«Agregar otro calendario»** en la barra lateral: deja la app como recién
+> abierta —sin desconectarte de Google— para que subas el siguiente.
 
 ## Paso 2 · Revisa y ajusta
 
@@ -87,6 +88,11 @@ Aquí va todo lo que se puede corregir de cada tabla: qué es cada columna y, ju
 debajo, los eventos ya armados. Si marcaste varias tablas, aparece **una pestaña
 por tabla** («Actividades», «Videoconferencias · grupo 8396…»); lo que sigue vale
 para cada una por separado.
+
+> ⚠️ **Este paso es tuyo.** Arriba verás un aviso amarillo: *«Verificar que no
+> falte ninguna actividad ni sesión»*. La app lee muy bien, pero no siempre lee
+> todo: compara la lista con tu plan antes de exportar. Nadie va a revisarla
+> después.
 
 ### Las columnas
 
