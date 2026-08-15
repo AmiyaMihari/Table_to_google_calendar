@@ -2072,6 +2072,10 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
+    st.markdown(
+        "[Guía de uso de la aplicación]"
+        "(https://docs.google.com/document/d/1ggn1vAZp7Ejgm9Ss8P8B0diormiNBKYsftx_hXsWRps/edit?usp=sharing)"
+    )
 
     restaurados = st.session_state.pop("aviso_restaurado", 0)
     if restaurados:
