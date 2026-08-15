@@ -23,6 +23,9 @@ from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
+# Respaldo del iframe del widget de Ko-fi para versiones de Streamlit sin
+# `st.iframe`; `st.html` no vale porque sanitiza (ver `_iframe_kofi`).
+import streamlit.components.v1 as componentes
 
 from tabla_calendar import deteccion, exportar, ia, tablas
 from tabla_calendar import google_calendar as gcal
@@ -1072,7 +1075,7 @@ def _leer_pdf_con_ia(datos: bytes, cfg: dict,
     if st.session_state.get(f"ia_fallo_{firma_archivo}"):
         return None
     try:
-        with st.spinner(f"Leyendo el PDF con IA ({cfg['model']})…"):
+        with st.spinner("Leyendo PDF…"):
             resultado, marca = _tablas_del_pdf_ia(
                 datos, ANIO_ACTUAL, cfg["api_key"], cfg["model"])
     except (ia.ErrorDeIA, planpdf.ErrorDePDF) as e:
@@ -1959,6 +1962,74 @@ def pestania_envio_directo(eventos: list[Evento], ajustes: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Donaciones
+# --------------------------------------------------------------------------- #
+
+# Widget oficial de Ko-fi, tal cual lo entrega su generador. Va dentro de un
+# iframe y no de `st.html`: éste sanitiza con DOMPurify y se lleva por delante
+# cualquier `<script>`, y encima el del widget es externo
+# (`storage.ko-fi.com`), que ni con el flag de JavaScript se cargaría.
+_WIDGET_KOFI = (
+    "<script type='text/javascript' "
+    "src='https://storage.ko-fi.com/cdn/widget/Widget_2.js'></script>"
+    "<script type='text/javascript'>"
+    "kofiwidget2.init('¡Gracias por Donar!', '#72a4f2', 'W7B72558PR');"
+    "kofiwidget2.draw();</script>"
+)
+
+_ENLACE_KOFI = "https://ko-fi.com/amiyamihari"
+
+# Alto justo del botón que dibuja el widget: más deja un hueco en blanco y
+# menos le saca barra de desplazamiento al iframe.
+_ALTO_KOFI = 70
+
+
+def _iframe_kofi() -> None:
+    """El widget de Ko-fi, dentro de un iframe.
+
+    `st.iframe` es el nombre nuevo de `st.components.v1.html`, que quedó
+    deprecado con fecha de retirada; y mientras siga vivo pinta **en la propia
+    página** un recuadro amarillo pidiendo el cambio (`client.showErrorDetails`
+    vale «full» por defecto, y esta app no lo toca), justo debajo del botón. Se
+    usa el nombre nuevo si existe y el viejo de respaldo, porque el piso de
+    `requirements.txt` (Streamlit 1.52) todavía no lo trae.
+    """
+    if hasattr(st, "iframe"):
+        st.iframe(_WIDGET_KOFI, height=_ALTO_KOFI)
+    else:
+        componentes.html(_WIDGET_KOFI, height=_ALTO_KOFI, scrolling=False)
+
+
+def seccion_donacion() -> None:
+    """Aporte voluntario, al fondo de la página principal.
+
+    Va debajo de las preguntas frecuentes y **siempre se dibuja**, con archivo
+    o sin él: quien ya exportó su plan es justo quien puede decidir aportar, y
+    esconderla hasta que haya una tabla abierta la dejaría invisible para
+    quien sólo entró a mirar.
+    """
+    st.divider()
+    izq, der = st.columns([1, 3], vertical_alignment="center")
+    with izq:
+        imagen = RAIZ / "assets" / "poverty_anime_girl.webp"
+        if imagen.exists():
+            st.image(str(imagen), width=200)
+    with der:
+        st.markdown("#### Apoyar el proyecto")
+        st.markdown(
+            "Con 1 USD se pagan unas 130 lecturas de planes con inteligencia "
+            "artificial: el semestre completo de unos 20 estudiantes, a seis "
+            "materias cada uno. Cualquier aporte mantiene la app gratuita para "
+            "toda la comunidad."
+        )
+        _iframe_kofi()
+        # Respaldo: el script vive en un dominio que los bloqueadores de
+        # anuncios cortan a menudo, y sin esto el hueco quedaría vacío y sin
+        # explicación.
+        st.caption(f"Si el botón no carga: [ko-fi.com/amiyamihari]({_ENLACE_KOFI})")
+
+
+# --------------------------------------------------------------------------- #
 # Principal
 # --------------------------------------------------------------------------- #
 
@@ -2114,6 +2185,8 @@ API de OpenAI para extraer las tablas; la API no lo usa para entrenar modelos y
 la app no lo guarda.
             """
         )
+
+    seccion_donacion()
 
     # Ya no queda nada que pueda reejecutar y tragarse el script, así que aquí
     # es donde se cierra la emergente si la recogida acaba de conectar. Sigue
