@@ -2013,7 +2013,7 @@ def seccion_donacion() -> None:
     with izq:
         imagen = RAIZ / "assets" / "poverty_anime_girl.webp"
         if imagen.exists():
-            st.image(str(imagen), width=260)
+            st.image(str(imagen), width=350)
     with der:
         st.markdown("#### Apoyar el proyecto")
         st.markdown(
