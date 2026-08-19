@@ -1042,13 +1042,13 @@ def paso_archivo() -> tuple[bytes, str] | None:
     return archivo
 
 
-@st.cache_data(show_spinner=False, max_entries=4)
+@st.cache_data(show_spinner=False, max_entries=32)
 def _tablas_del_pdf(datos: bytes, anio: int) -> list[planpdf.Candidata]:
     """Buscar las tablas tarda ~1 s y Streamlit reejecuta la página a cada clic."""
     return planpdf.extraer(datos, anio_defecto=anio)
 
 
-@st.cache_data(show_spinner=False, max_entries=4)
+@st.cache_data(show_spinner=False, max_entries=32)
 def _tablas_del_pdf_ia(datos: bytes, anio: int, clave: str,
                        modelo: str) -> tuple[ia.ResultadoIA, str]:
     """Una llamada al modelo por archivo, y ni una más: cada una cuesta dinero.
