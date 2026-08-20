@@ -1019,12 +1019,11 @@ def paso_archivo() -> tuple[bytes, str] | None:
     if archivo is None:
         nota(
             "<b>Lo más rápido es subir el PDF del plan de trabajo tal como lo "
-            "entregaron.</b> La app busca dentro sus tablas —las actividades y las "
-            "videoconferencias— y muestra las que encontró para elegir cuáles pasar "
+            "entregaron.</b> La app busca dentro sus tablas (las actividades y las "
+            "videoconferencias) y muestra las que encontró para elegir cuáles pasar "
             "al calendario."
             "<br><br>"
-            "La tabla suelta en <b>CSV o Excel</b> también sirve, y no importa si "
-            "arriba hay filas de título ni si las celdas de «Unidad» están combinadas."
+            "La tabla en <b>CSV o Excel</b> también sirve."
         )
         return None
 
